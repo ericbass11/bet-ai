@@ -1,0 +1,58 @@
+{
+  "_sobre": [
+    "Mapeamento da Superbet Brasil, escrito a partir de uma captura real do",
+    "endpoint de jogos ao vivo e testado contra ela (tests/test_discover.py).",
+    "",
+    "Peculiaridades desta casa que motivaram cada escolha:",
+    "  - não existe nome de time no payload, só IDs; os nomes vivem em",
+    "    `matchName` separados pelo caractere '·' (ponto médio, não hífen);",
+    "  - placar e minuto ficam em `metadata` e vêm como texto ('59', '2');",
+    "  - todos os mercados vêm achatados num array `odds` único, separados",
+    "    pelo campo `marketName` — daí o `filter_field` em cada mercado;",
+    "  - a liga só aparece como `tournamentId` numérico neste endpoint.",
+    "",
+    "IMPORTANTE: o endpoint de listagem devolve apenas o mercado principal",
+    "(Resultado Final), mesmo com `marketCount: 22`. Os demais mercados vêm",
+    "do endpoint por evento. Para mapeá-los, capture a página de um jogo",
+    "específico e rode `bet-ai inspect` nessa captura."
+  ],
+
+  "url": "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date",
+  "params": {
+    "currentStatus": "active",
+    "offerState": "live"
+  },
+  "headers": {
+    "Accept": "application/json"
+  },
+
+  "events_path": "data",
+
+  "fields": {
+    "event_id": "eventId",
+    "league": "tournamentId",
+    "home_team": { "path": "matchName", "split": "·", "index": 0 },
+    "away_team": { "path": "matchName", "split": "·", "index": 1 },
+    "minute": "metadata.minutes",
+    "score_home": "metadata.homeTeamScore",
+    "score_away": "metadata.awayTeamScore",
+    "red_cards_home": "metadata.homeTeamRedCards",
+    "red_cards_away": "metadata.awayTeamRedCards"
+  },
+
+  "markets": [
+    {
+      "key": "1x2",
+      "path": "odds",
+      "filter_field": "marketName",
+      "filter_value": "Resultado Final",
+      "outcome_field": "code",
+      "odds_field": "price",
+      "outcome_map": {
+        "1": "home",
+        "0": "draw",
+        "2": "away"
+      }
+    }
+  ]
+}

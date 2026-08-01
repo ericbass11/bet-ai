@@ -188,22 +188,42 @@ class GenericJsonProvider(Provider):
             line=float(line) if line is not None else None,
         )
 
+    def _field(self, raw: Any, spec: Any, default: Any = None) -> Any:
+        """Lê um campo do evento.
+
+        O spec normalmente é um caminho pontilhado. Também aceita a forma
+        `{"path": ..., "split": "·", "index": 0}`, para casas que só publicam
+        os dois times num texto único ("Casa·Fora", "Casa - Fora").
+        """
+        if spec is None:
+            return default
+        if isinstance(spec, str):
+            return dig(raw, spec, default)
+
+        value = dig(raw, spec.get("path", ""), None)
+        separator = spec.get("split")
+        if value is None or separator is None:
+            return value if value is not None else default
+        partes = [p.strip() for p in str(value).split(separator)]
+        index = int(spec.get("index", 0))
+        return partes[index] if 0 <= index < len(partes) else default
+
     def _parse_event(self, raw: Any) -> Event | None:
         f = self.map.fields
-        event_id = dig(raw, f.get("event_id", "id"))
-        home = dig(raw, f.get("home_team", "home"))
-        away = dig(raw, f.get("away_team", "away"))
+        event_id = self._field(raw, f.get("event_id", "id"))
+        home = self._field(raw, f.get("home_team", "home"))
+        away = self._field(raw, f.get("away_team", "away"))
         if not event_id or not home or not away:
             return None
 
-        minute = int(dig(raw, f.get("minute", "minute"), 0) or 0)
+        minute = _as_int(self._field(raw, f.get("minute", "minute")))
         state = MatchState(
             minute=minute,
             period=_period_for(minute),
-            score_home=int(dig(raw, f.get("score_home", "score_home"), 0) or 0),
-            score_away=int(dig(raw, f.get("score_away", "score_away"), 0) or 0),
-            red_cards_home=int(dig(raw, f.get("red_cards_home", ""), 0) or 0),
-            red_cards_away=int(dig(raw, f.get("red_cards_away", ""), 0) or 0),
+            score_home=_as_int(self._field(raw, f.get("score_home", "score_home"))),
+            score_away=_as_int(self._field(raw, f.get("score_away", "score_away"))),
+            red_cards_home=_as_int(self._field(raw, f.get("red_cards_home"))),
+            red_cards_away=_as_int(self._field(raw, f.get("red_cards_away"))),
         )
 
         markets = [m for spec in self.map.markets if (m := self._parse_market(raw, spec))]
@@ -212,7 +232,7 @@ class GenericJsonProvider(Provider):
 
         return Event(
             event_id=str(event_id),
-            league=str(dig(raw, f.get("league", "league"), "desconhecida")),
+            league=str(self._field(raw, f.get("league", "league"), "desconhecida")),
             home_team=str(home),
             away_team=str(away),
             starts_at=datetime.now(timezone.utc),
@@ -240,6 +260,20 @@ class GenericJsonProvider(Provider):
             )
 
         return [e for raw in raw_events if (e := self._parse_event(raw))]
+
+
+def _as_int(value: Any) -> int:
+    """Converte para inteiro tolerando texto e ausência.
+
+    Várias casas publicam placar e minuto como string ("59", "2"), e alguns
+    campos vêm nulos em jogos que ainda não começaram.
+    """
+    if value is None:
+        return 0
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
 
 
 def _period_for(minute: int) -> str:

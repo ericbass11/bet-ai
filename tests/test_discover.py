@@ -409,3 +409,173 @@ def test_filtro_que_nao_casa_descarta_o_mercado():
     }
     provider = GenericJsonProvider(FM(spec), respect_robots=False)
     assert provider._parse_event(PAYLOAD_ACHATADO["data"][0]) is None
+
+
+# ---------- estrutura real da Superbet ----------
+# Recorte fiel de uma resposta de /v2/pt-BR/events/by-date?offerState=live
+# (só dados públicos de odds).
+
+SUPERBET = {
+    "data": [
+        {
+            "uuid": "c07e8939-e5a5-5de0-bb73-4233d1b27914",
+            "eventId": 14068216,
+            "homeTeamId": "28148",
+            "awayTeamId": "172622",
+            "tournamentId": 1737,
+            "matchName": "Gandzasar Kapan·Ararat Armenia",
+            "metadata": {
+                "homeTeamScore": "2",
+                "awayTeamScore": "3",
+                "homeTeamRedCards": 0,
+                "awayTeamRedCards": 1,
+                "minutes": "59",
+                "status": "STARTED",
+                "periodStatus": "2H",
+            },
+            "marketCount": 22,
+            "odds": [
+                {
+                    "marketUuid": "a492cc7b-68e0-52d0-8e79-dd6fa5910d35",
+                    "marketId": 547, "price": 20, "code": "1", "name": "1",
+                    "showSpecialBetValue": "0", "marketName": "Resultado Final",
+                    "tags": "Combinable,BPWM,Match Betting,v2",
+                },
+                {
+                    "marketUuid": "a492cc7b-68e0-52d0-8e79-dd6fa5910d35",
+                    "marketId": 547, "price": 6.25, "code": "0", "name": "X",
+                    "showSpecialBetValue": "0", "marketName": "Resultado Final",
+                    "tags": "BPWM,Combinable,Match Betting,v2",
+                },
+                {
+                    "marketUuid": "a492cc7b-68e0-52d0-8e79-dd6fa5910d35",
+                    "marketId": 547, "price": 1.14, "code": "2", "name": "2",
+                    "showSpecialBetValue": "0", "marketName": "Resultado Final",
+                    "tags": "BPWM,Combinable,Match Betting,v2",
+                },
+            ],
+        }
+    ]
+}
+
+
+def test_superbet_nao_usa_id_como_nome_de_time():
+    """`homeTeamId: "28148"` casa o padrão mas produziria "28148 x 172622"."""
+    fields = infer_fields(SUPERBET["data"][0])
+    assert fields["home_team"] != "homeTeamId"
+    assert fields["away_team"] != "awayTeamId"
+
+
+def test_superbet_separa_os_times_do_matchname():
+    fields = infer_fields(SUPERBET["data"][0])
+    assert fields["home_team"] == {"path": "matchName", "split": "·", "index": 0}
+    assert fields["away_team"] == {"path": "matchName", "split": "·", "index": 1}
+
+
+def test_superbet_acha_placar_e_minuto_dentro_de_metadata():
+    fields = infer_fields(SUPERBET["data"][0])
+    assert fields["score_home"] == "metadata.homeTeamScore"
+    assert fields["score_away"] == "metadata.awayTeamScore"
+    assert fields["minute"] == "metadata.minutes"
+
+
+def test_superbet_agrupa_por_marketname_e_nao_por_uuid():
+    from betai.discover import market_labels
+
+    mercados = market_labels(SUPERBET["data"][0])
+    assert [m.name for m in mercados] == ["Resultado Final"]
+
+
+def test_superbet_ponta_a_ponta():
+    """O teste que vale: o mapa inferido, aplicado ao payload real."""
+    fmap = build_field_map("https://superbet/api", SUPERBET)
+    assert fmap is not None
+    fmap["markets"][0]["outcome_map"] = {"1": "home", "0": "draw", "2": "away"}
+
+    provider = GenericJsonProvider(FieldMap(fmap), respect_robots=False)
+    event = provider._parse_event(SUPERBET["data"][0])
+
+    assert event is not None
+    assert event.label == "Gandzasar Kapan x Ararat Armenia"
+    assert event.state.minute == 59          # veio como texto "59"
+    assert event.state.score_home == 2       # veio como texto "2"
+    assert event.state.score_away == 3
+    assert event.state.red_cards_away == 1
+    assert event.state.period == "2h"
+
+    mo = event.market(MarketKey.MATCH_ODDS)
+    assert [s.outcome for s in mo.selections] == ["home", "draw", "away"]
+    assert mo.selection("draw").odds == 6.25
+
+
+def test_placar_em_texto_vira_inteiro():
+    from betai.providers.generic_json import _as_int
+
+    assert _as_int("59") == 59
+    assert _as_int(" 2 ") == 2
+    assert _as_int(None) == 0
+    assert _as_int("") == 0
+    assert _as_int("intervalo") == 0
+
+
+def test_split_de_time_nao_quebra_com_separador_ausente():
+    """Nome sem separador não pode virar time vazio."""
+    from betai.providers.generic_json import FieldMap as FM
+
+    spec = {
+        "url": "u",
+        "fields": {
+            "event_id": "eventId",
+            "home_team": {"path": "matchName", "split": "·", "index": 0},
+            "away_team": {"path": "matchName", "split": "·", "index": 1},
+        },
+        "markets": [
+            {"key": "1x2", "path": "odds", "outcome_field": "code", "odds_field": "price"}
+        ],
+    }
+    evento = json.loads(json.dumps(SUPERBET["data"][0]))
+    evento["matchName"] = "Jogo Sem Separador"
+    provider = GenericJsonProvider(FM(spec), respect_robots=False)
+    assert provider._parse_event(evento) is None
+
+
+def test_mapa_superbet_versionado_funciona():
+    """O examples/superbet.json tem que parsear a estrutura real da casa.
+
+    Se a Superbet mudar o formato, é este teste que avisa.
+    """
+    from pathlib import Path
+
+    caminho = Path(__file__).resolve().parents[1] / "examples" / "superbet.json"
+    spec = json.loads(caminho.read_text(encoding="utf-8"))
+
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False)
+    event = provider._parse_event(SUPERBET["data"][0])
+
+    assert event is not None
+    assert event.label == "Gandzasar Kapan x Ararat Armenia"
+    assert event.state.minute == 59
+    assert (event.state.score_home, event.state.score_away) == (2, 3)
+    assert event.state.red_cards_away == 1
+
+    mo = event.market(MarketKey.MATCH_ODDS)
+    assert [s.outcome for s in mo.selections] == ["home", "draw", "away"]
+    assert mo.selection("home").odds == 20
+    assert mo.selection("away").odds == 1.14
+
+
+def test_mapa_superbet_alimenta_o_pipeline():
+    """Ponta final: das odds reais até a análise, sem erro."""
+    from pathlib import Path
+
+    from betai.pipeline import Pipeline
+
+    caminho = Path(__file__).resolve().parents[1] / "examples" / "superbet.json"
+    spec = json.loads(caminho.read_text(encoding="utf-8"))
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False)
+    event = provider._parse_event(SUPERBET["data"][0])
+
+    analysis = Pipeline().analyze(event)
+    assert analysis.lambda_home > 0
+    # 2-3 aos 59 minutos: o visitante tem que estar bem à frente.
+    assert analysis.probabilities["1x2.away"] > analysis.probabilities["1x2.home"]

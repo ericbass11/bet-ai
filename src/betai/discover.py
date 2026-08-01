@@ -34,10 +34,11 @@ PATTERNS: dict[str, list[str]] = {
     "home_team": [r"home_?team", r"^home$", r"team_?1", r"^localteam", r"mandante", r"gazde"],
     "away_team": [r"away_?team", r"^away$", r"team_?2", r"^visitorteam", r"visitante", r"oaspeti"],
     "minute": [r"^minute", r"^clock", r"elapsed", r"match_?time", r"^minuto", r"^tempo"],
-    "score_home": [r"score_?home", r"home_?score", r"goals_?home", r"placar_?casa"],
-    "score_away": [r"score_?away", r"away_?score", r"goals_?away", r"placar_?fora"],
-    "red_cards_home": [r"red_?cards?_?home", r"home_?red"],
-    "red_cards_away": [r"red_?cards?_?away", r"away_?red"],
+    # `home.*score` cobre tanto `home_score` quanto `homeTeamScore`.
+    "score_home": [r"score_?home", r"home.*score", r"goals_?home", r"placar_?casa"],
+    "score_away": [r"score_?away", r"away.*score", r"goals_?away", r"placar_?fora"],
+    "red_cards_home": [r"red_?cards?_?home", r"home.*red"],
+    "red_cards_away": [r"red_?cards?_?away", r"away.*red"],
 }
 
 ODDS_KEYS = [r"^odds?$", r"^price$", r"coefficient", r"^decimal", r"^rate$", r"^cota$", r"^valor$"]
@@ -166,6 +167,11 @@ def infer_fields(sample: dict) -> dict[str, str]:
 
     for name, patterns in PATTERNS.items():
         matches = [k for k in keys if _matches(k.rsplit(".", 1)[-1], patterns)]
+        # Nome de time tem que ser texto não-numérico. `homeTeamId: "28148"` e
+        # `homeTeamScore: "2"` casam o padrão `home_?team` mas produziriam
+        # "28148 x 172622" ou "2 x 3" na tela.
+        if "team" in name:
+            matches = [k for k in matches if _looks_like_a_name(_dig(sample, k))]
         if matches:
             # O caminho mais curto é quase sempre o certo: `id` ganha de
             # `markets.0.id`.
@@ -173,6 +179,14 @@ def infer_fields(sample: dict) -> dict[str, str]:
             resolved = _descend_to_leaf(sample, path)
             if resolved:
                 fields[name] = resolved
+
+    # Alguns provedores só publicam os dois times num texto só — a Superbet
+    # usa `matchName: "Casa·Fora"`. Sem isto, o nome dos times some.
+    if "home_team" not in fields or "away_team" not in fields:
+        split = _find_pair_field(sample, keys)
+        if split:
+            fields["home_team"] = {**split, "index": 0}
+            fields["away_team"] = {**split, "index": 1}
 
     # Times em lista (`participants: [{name}, {name}]`) é o padrão mais comum
     # depois de campos nomeados, e não casa com os padrões acima.
@@ -213,6 +227,37 @@ def _descend_to_leaf(sample: dict, path: str) -> str | None:
         # Sem campo de nome óbvio, o primeiro escalar de texto serve.
         leaf = next((k for k, v in value.items() if isinstance(v, str)), None)
         return f"{path}.{leaf}" if leaf else None
+    return None
+
+
+def _looks_like_a_name(value: Any) -> bool:
+    """Texto que pode ser nome de time — descarta IDs e placares numéricos."""
+    return isinstance(value, str) and bool(value.strip()) and not value.strip().isdigit()
+
+
+# Separadores usados por casas que juntam os dois times num campo só.
+PAIR_SEPARATORS = ["·", " - ", " vs ", " v ", " x ", " @ ", "–", "—"]
+
+
+def _find_pair_field(sample: dict, keys: list[str]) -> dict[str, str] | None:
+    """Acha um campo do tipo "Casa·Fora" e devolve como separá-lo.
+
+    Só aceita divisão em exatamente duas partes não vazias — "Sporting - CP -
+    Braga" dividiria em três e seria pior que não dividir.
+    """
+    candidatos = [
+        k
+        for k in keys
+        if re.search(r"match|event|fixture|game|name|nome", k.rsplit(".", 1)[-1].lower())
+    ]
+    for key in sorted(candidatos, key=lambda k: (k.count("."), len(k))):
+        value = _dig(sample, key)
+        if not isinstance(value, str) or len(value) < 3:
+            continue
+        for sep in PAIR_SEPARATORS:
+            partes = [p.strip() for p in value.split(sep)]
+            if len(partes) == 2 and all(partes):
+                return {"path": key, "split": sep}
     return None
 
 
@@ -399,10 +444,20 @@ def market_labels(sample: dict) -> list[MarketSample]:
 
         # O nome do mercado tem que ser texto: `marketId: 8` identifica, mas
         # não diz nada; `marketName: "Total de Gols"` é o que orienta o mapa.
+        # Preferência: `marketName` > qualquer campo de mercado com texto >
+        # o que sobrar. Um `marketUuid` também é texto, mas agrupar por UUID
+        # não diz nada a quem vai escrever o mapa.
         candidatos_nome = [k for k in item if re.search(r"market|mercado|bet_?type", k.lower())]
         nome_key = next(
-            (k for k in candidatos_nome if isinstance(item[k], str)),
-            next(iter(candidatos_nome), None),
+            (k for k in candidatos_nome if re.search(r"name|nome|label", k.lower())),
+            next(
+                (
+                    k
+                    for k in candidatos_nome
+                    if isinstance(item[k], str) and not re.search(r"uuid|guid|_?id$|tags", k.lower())
+                ),
+                next(iter(candidatos_nome), None),
+            ),
         )
         label_key = next(
             (k for k in item if _matches(k, LABEL_KEYS) and isinstance(item[k], str)), None
