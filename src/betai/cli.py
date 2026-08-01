@@ -76,8 +76,8 @@ def print_analysis(analysis: Analysis, verbose: bool = False) -> None:
 
     if analysis.baseline_source == "live_inverted":
         print(
-            f"  {YELLOW}⚠ sem odds pré-jogo para este evento: o baseline foi invertido "
-            f"das odds ao vivo, então o modelo concorda com o mercado por construção.{RESET}"
+            f"  {YELLOW}sem odds pré-jogo: nenhuma análise independente possível.{RESET}"
+            f" {DIM}Rode `bet-ai upcoming` antes do jogo começar.{RESET}"
         )
 
     print(
@@ -157,6 +157,9 @@ def run_live_cycle(
         print("Nenhum jogo ao vivo no momento.")
         return
 
+    sem_baseline = 0
+    mostrados = 0
+
     for event in events:
         if store:
             store.save_snapshot(event)
@@ -167,7 +170,21 @@ def run_live_cycle(
         )
         if store:
             store.save_analysis(analysis)
+
+        if analysis.baseline_source == "live_inverted":
+            sem_baseline += 1
+        if getattr(args, "apenas_valor", False) and not analysis.value_bets:
+            continue
         print_analysis(analysis, verbose=args.verbose)
+        mostrados += 1
+
+    print(f"\n{DIM}{len(events)} jogos ao vivo, {mostrados} exibidos.{RESET}")
+    if sem_baseline:
+        print(
+            f"{YELLOW}{sem_baseline} sem odds pré-jogo{RESET} — sem baseline não há como "
+            f"discordar do mercado. {DIM}Rode `bet-ai upcoming` antes dos jogos "
+            f"começarem para capturá-lo.{RESET}"
+        )
 
 
 def cmd_live(args: argparse.Namespace, settings: Settings) -> int:
@@ -444,6 +461,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     live = sub.add_parser("live", help="analisa os jogos ao vivo agora")
     add_common(live)
+    live.add_argument(
+        "--apenas-valor",
+        action="store_true",
+        dest="apenas_valor",
+        help="mostra só os jogos com aposta de valor",
+    )
     live.add_argument("--ai", action="store_true", help="ativa a revisão do Claude")
     live.add_argument("--context", help="contexto externo passado à IA (notícias, desfalques)")
     live.set_defaults(func=cmd_live)
@@ -455,6 +478,10 @@ def build_parser() -> argparse.ArgumentParser:
     watch = sub.add_parser("watch", help="reanalisa em intervalo fixo")
     add_common(watch)
     watch.add_argument("--interval", type=int, default=60, help="segundos entre ciclos")
+    watch.add_argument(
+        "--apenas-valor", action="store_true", dest="apenas_valor",
+        help="mostra só os jogos com aposta de valor",
+    )
     watch.add_argument("--ai", action="store_true")
     watch.add_argument("--context")
     watch.set_defaults(func=cmd_watch)

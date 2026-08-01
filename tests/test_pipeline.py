@@ -192,3 +192,64 @@ def test_sem_ajustes_nada_muda():
     probs = {"1x2.home": 0.5, "1x2.draw": 0.25, "1x2.away": 0.25}
     verdict = AiVerdict(summary="contexto insuficiente", confidence=0.0)
     assert apply_adjustments(probs, verdict) == pytest.approx(probs)
+
+
+# ---------- sem baseline pré-jogo ----------
+
+
+def test_sem_baseline_nao_inventa_valor():
+    """O caso que quebrou com dados reais da Superbet.
+
+    Sem odds pré-jogo, as taxas vêm das próprias odds ao vivo — então não
+    existe opinião independente e não pode existir vantagem. Antes, os
+    efeitos de placar e cartão eram aplicados por cima de odds que já os
+    embutiam, e a divergência artificial virava dezenas de apostas falsas.
+    """
+    for minuto, sh, sa in [(20, 0, 0), (45, 1, 0), (73, 1, 1), (87, 2, 4)]:
+        ao_vivo = make_event(
+            minute=minuto, sh=sh, sa=sa, event_id=f"sem-base-{minuto}",
+            odds_1x2=(2.50, 3.20, 3.00),
+        )
+        analysis = Pipeline(min_edge=0.03).analyze(ao_vivo)
+        assert analysis.baseline_source == "live_inverted"
+        assert analysis.value_bets == [], f"{minuto}': {analysis.value_bets}"
+
+
+def test_sem_baseline_o_modelo_reproduz_o_mercado():
+    """Se o modelo veio do mercado, ele tem que concordar com o mercado."""
+    ao_vivo = make_event(minute=70, sh=1, sa=0, event_id="espelho")
+    analysis = Pipeline().analyze(ao_vivo)
+    market = market_probabilities(ao_vivo)
+
+    for chave in ("1x2.home", "1x2.away", "over_under@2.5.over"):
+        assert analysis.probabilities[chave] == pytest.approx(market[chave], abs=0.02)
+
+
+def test_lambdas_nao_explodem_no_fim_do_jogo():
+    """Aos 87 minutos a fração restante é ~0.04. Reescalar por ela produzia
+    lambdas de 50 gols."""
+    ao_vivo = make_event(minute=87, sh=2, sa=4, event_id="fim")
+    analysis = Pipeline().analyze(ao_vivo)
+    assert analysis.lambda_home < 4.0, analysis.lambda_home
+    assert analysis.lambda_away < 4.0, analysis.lambda_away
+
+
+def test_lambda_nunca_e_zero():
+    """Lambda 0.00 significaria 'impossível marcar' — nenhuma odd justifica."""
+    lopsided = make_event(event_id="desequilibrado", odds_1x2=(1.02, 25.0, 60.0))
+    analysis = Pipeline().analyze(lopsided)
+    assert analysis.lambda_home > 0
+    assert analysis.lambda_away > 0
+
+
+def test_com_baseline_o_valor_volta_a_aparecer():
+    """A supressão vale só para o caso sem baseline — não pode matar o
+    funcionamento normal."""
+    pipeline = Pipeline(min_edge=0.03)
+    pipeline.register_baseline(make_event(event_id="com-base"))
+    ao_vivo = make_event(
+        minute=80, sh=2, sa=0, event_id="com-base", odds_1x2=(1.60, 6.0, 15.0)
+    )
+    analysis = pipeline.analyze(ao_vivo)
+    assert analysis.baseline_source == "pre_match"
+    assert analysis.value_bets

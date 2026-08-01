@@ -161,12 +161,12 @@ class Pipeline:
             self._baselines[event.event_id] = baseline
             return baseline, "pre_match"
 
-        # Última alternativa: inverter as odds ao vivo. Devolve as taxas dos
-        # gols restantes, então precisam ser reescaladas para 90 minutos.
-        from .engine.live import remaining_fraction
-
+        # Última alternativa: inverter as odds ao vivo. O resultado são as
+        # taxas dos gols **restantes** — não reescalamos para 90 minutos,
+        # porque aos 87' isso significa dividir por 0.04 e produzir um lambda
+        # de 50 gols.
         p_home, p_away, p_over, over_line = _fair_inputs(event, self.devig_method)
-        rem_h, rem_a = calibrate(
+        rem = calibrate(
             p_home=p_home,
             p_away=p_away,
             p_over=p_over,
@@ -176,12 +176,28 @@ class Pipeline:
             base_home=event.state.score_home,
             base_away=event.state.score_away,
         )
-        remaining = max(remaining_fraction(event.state.minute), 0.05)
-        return (rem_h / remaining, rem_a / remaining), "live_inverted"
+        return rem, "live_inverted"
 
     def analyze(self, event: Event) -> Analysis:
         """Análise completa de um evento, sem a camada de IA."""
         (lam_home, lam_away), source = self._baseline_for(event)
+
+        if source == "live_inverted":
+            # Sem baseline pré-jogo não existe opinião independente: as taxas
+            # vieram das próprias odds ao vivo. Aplicar por cima os efeitos de
+            # placar e cartão — que essas odds já embutem — criaria divergência
+            # artificial e encheria a tela de "valor" inexistente.
+            matrix = ScoreMatrix(lam_home, lam_away, self.live_config.rho).shifted(
+                event.state.score_home, event.state.score_away
+            )
+            return Analysis(
+                event=event,
+                lambda_home=lam_home,
+                lambda_away=lam_away,
+                baseline_source=source,
+                probabilities=model_probabilities(matrix, event),
+                value_bets=[],
+            )
 
         matrix = live_matrix(lam_home, lam_away, event.state, self.live_config)
         model = model_probabilities(matrix, event)

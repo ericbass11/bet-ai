@@ -263,6 +263,9 @@ def calibrate(
 
             supremacy = _bisect(diff_of, -total + 1e-6, total - 1e-6, diff_target)
 
-    lam_home = max((total + supremacy) / 2, 1e-6)
-    lam_away = max((total - supremacy) / 2, 1e-6)
+    # Piso de 0.02: quando o mercado é muito desequilibrado a bisseção encosta
+    # no limite e produziria lambda 0.00 — que significa "é impossível este
+    # time marcar", coisa que nenhuma odd justifica.
+    lam_home = max((total + supremacy) / 2, 0.02)
+    lam_away = max((total - supremacy) / 2, 0.02)
     return lam_home, lam_away
