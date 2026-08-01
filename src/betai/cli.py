@@ -285,7 +285,23 @@ def cmd_web(args: argparse.Namespace, settings: Settings) -> int:
     )
     coletor.start()
 
-    servidor = servir(estado, args.host, args.port)
+    try:
+        servidor = servir(estado, args.host, args.port)
+    except OSError as exc:
+        # Porta ocupada é quase sempre uma interface anterior ainda no ar.
+        # Sem esta mensagem o processo morre com um traceback de socket que
+        # não diz o que fazer — e em segundo plano, morre calado.
+        parar.set()
+        print(
+            f"Não consegui abrir a porta {args.port}: {exc}\n\n"
+            f"Se já houver uma interface rodando, encerre-a:\n"
+            f"    pkill -f 'bet-ai web'\n"
+            f"Ou use outra porta:\n"
+            f"    bet-ai web --port {args.port + 1}",
+            file=sys.stderr,
+        )
+        return 1
+
     endereco = f"http://{'localhost' if args.host in ('', '0.0.0.0') else args.host}:{args.port}"
     print(f"Interface em {BOLD}{endereco}{RESET}  {DIM}(Ctrl-C para parar){RESET}")
     print(f"{DIM}Atualizando a cada {args.interval}s.{RESET}")

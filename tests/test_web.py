@@ -247,3 +247,29 @@ def test_leitura_nao_segura_o_lock_durante_o_laco(tmp_path):
         store.save_snapshot(make_event(event_id="x"))
         for _ in store.value_bet_history():
             store.tracked_events()  # travaria se o lock ainda estivesse preso
+
+
+def test_porta_ocupada_da_mensagem_util(capsys, tmp_path, monkeypatch):
+    """Sem isto o processo morre com traceback de socket — e, em segundo
+    plano com a saída redirecionada, morre sem deixar rastro."""
+    import argparse
+
+    from betai import cli
+    from betai.config import Settings
+
+    ocupado = servir(Estado(), "127.0.0.1", 0)
+    porta = ocupado.server_address[1]
+    try:
+        args = argparse.Namespace(
+            port=porta, host="127.0.0.1", interval=60, sem_navegador=True,
+            ai=False, context=None, no_store=True, verbose=False,
+        )
+        monkeypatch.setattr(cli, "build_provider", lambda s: __import__(
+            "betai.providers", fromlist=["MockProvider"]).MockProvider())
+
+        assert cli.cmd_web(args, Settings()) == 1
+        erro = capsys.readouterr().err
+        assert "pkill -f 'bet-ai web'" in erro
+        assert f"--port {porta + 1}" in erro
+    finally:
+        ocupado.server_close()
