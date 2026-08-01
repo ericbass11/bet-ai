@@ -634,6 +634,22 @@ def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
     if args.listar:
         return _listar_captura(raw, payloads)
 
+    if args.contendo:
+        # Domínio já identificado: o que falta é ver o formato da resposta
+        # para escrever o mapeamento, e aí a busca por palavra atrapalha —
+        # os campos podem se chamar qualquer coisa.
+        alvo = [(u, p) for u, p in payloads if args.contendo in u]
+        if not alvo:
+            print(f"Nenhuma resposta com '{args.contendo}' no endereço.", file=sys.stderr)
+            return 1
+        from .discover import summarize
+
+        for url, payload in alvo[: args.limite]:
+            print(f"{BOLD}{url.split('?')[0]}{RESET}")
+            print(json.dumps(summarize(payload), ensure_ascii=False, indent=2))
+            print()
+        return 0
+
     termos = [_normalizar(t) for t in (args.termo or [])] or TERMOS_DE_ESTATISTICA
     if args.termo:
         print(f"{DIM}Procurando por: {', '.join(args.termo)}{RESET}\n")
@@ -804,6 +820,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--listar",
         action="store_true",
         help="lista tudo que a captura contém, por domínio, sem procurar nada",
+    )
+    estat.add_argument(
+        "--contendo", help="mostra o formato das respostas com este trecho no endereço"
     )
     estat.set_defaults(func=cmd_estatisticas)
 

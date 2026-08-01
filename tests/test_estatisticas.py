@@ -125,7 +125,8 @@ def _rodar(tmp_path, har, **kwargs) -> tuple[int, str]:
     caminho = tmp_path / "captura.har"
     caminho.write_text(json.dumps(har), encoding="utf-8")
     args = argparse.Namespace(
-        captura=str(caminho), termo=None, limite=8, **{"listar": False, **kwargs}
+        captura=str(caminho), termo=None, limite=8,
+        **{"listar": False, "contendo": None, **kwargs}
     )
     import contextlib
     import io
@@ -173,7 +174,8 @@ def test_comando_avisa_quando_o_arquivo_nao_existe(tmp_path):
     from betai.config import Settings
 
     args = argparse.Namespace(
-        captura=str(tmp_path / "nao-existe.har"), termo=None, limite=8, listar=False
+        captura=str(tmp_path / "nao-existe.har"), termo=None, limite=8, listar=False,
+        contendo=None,
     )
     import contextlib
     import io
@@ -438,3 +440,23 @@ def test_listar_explica_a_ausencia_de_websocket(tmp_path):
     _, saida = _rodar(tmp_path, _har(("https://casa.example/api", SUPERBET)), listar=True)
     assert "0 conexão(ões) WebSocket" in saida
     assert "F5" in saida
+
+
+def test_contendo_mostra_o_formato_da_resposta(tmp_path):
+    """Depois de achar o domínio, o que falta é o formato — e aí a busca por
+    palavra atrapalha, porque os campos podem se chamar qualquer coisa."""
+    har = _har(
+        ("https://casa.example/api/odds", SUPERBET),
+        ("https://scorealarm-stats.example/v2/soccer/match/13332095", SPORTRADAR),
+    )
+    codigo, saida = _rodar(tmp_path, har, contendo="scorealarm")
+
+    assert codigo == 0
+    assert "Ball possession" in saida
+    assert "casa.example" not in saida, "filtrou pelo endereço errado"
+
+
+def test_contendo_sem_correspondencia_avisa(tmp_path):
+    codigo, saida = _rodar(tmp_path, _har(("https://casa.example/api", SUPERBET)), contendo="xyz")
+    assert codigo == 1
+    assert "xyz" in saida
