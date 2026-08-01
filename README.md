@@ -98,7 +98,7 @@ o pip é que é velho. O venv do macOS costuma vir com uma dessas.
 Confira que ficou de pé:
 
 ```bash
-pytest        # 106 testes, sem rede
+pytest        # 158 testes, sem rede
 bet-ai live   # jogos sintéticos do provedor mock
 ```
 
@@ -108,6 +108,7 @@ O provedor padrão é o `mock`, que gera jogos sintéticos coerentes — dá par
 rodar tudo sem chave de API e sem rede:
 
 ```bash
+bet-ai web                 # interface no navegador, atualiza sozinha
 bet-ai upcoming            # jogos que ainda vão começar
 bet-ai live                # jogos ao vivo, com as apostas de valor
 bet-ai live -v             # inclui a tabela modelo × mercado
@@ -127,6 +128,23 @@ bet-ai live --ai --context "Mandante sem o artilheiro (suspenso). Visitante já 
 
 O `--context` é o que a IA tem de novo em relação ao modelo. Sem contexto, ela
 deve devolver ajustes zerados — e o prompt instrui exatamente isso.
+
+## Interface web
+
+```bash
+bet-ai web                      # abre em http://localhost:8000
+bet-ai web --interval 30        # coleta a cada 30s
+bet-ai web --port 9000 --sem-navegador
+```
+
+Página local que se atualiza sozinha, com filtro de "só com valor" e as
+apostas traduzidas para o vocabulário da casa ("Palmeiras vence" em vez de
+`1x2.home`). Roda só com a biblioteca padrão do Python — sem framework, sem
+build, sem nada externo: a página não busca um único recurso de fora, o que
+também significa que funciona sem internet.
+
+Uma falha de coleta não derruba a tela: vira um aviso e o ciclo seguinte
+tenta de novo, mantendo os últimos dados visíveis.
 
 ## Provedores
 
@@ -259,10 +277,10 @@ snapshots é poder recalibrá-los contra o seu próprio histórico.
 pytest
 ```
 
-106 testes cobrindo os quatro métodos de devig, a matriz de placares e todos os
+158 testes cobrindo os quatro métodos de devig, a matriz de placares e todos os
 mercados derivados dela, a calibração ida-e-volta, o ajuste ao vivo, o
-dimensionamento por Kelly, os provedores, a inferência de mapeamento e o
-pipeline ponta a ponta.
+dimensionamento por Kelly, os provedores, a inferência de mapeamento, a
+interface web e o pipeline ponta a ponta.
 
 ## Aviso
 

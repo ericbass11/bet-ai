@@ -135,14 +135,18 @@ def build_analyst(args: argparse.Namespace, settings: Settings):
     )
 
 
-def run_live_cycle(
+def collect_live_analyses(
     provider: Provider,
     store: Store | None,
     pipeline: Pipeline,
-    analyst,
-    args: argparse.Namespace,
-) -> None:
-    """Um ciclo de análise ao vivo. Reutilizável pelo `watch`."""
+    analyst=None,
+    context: str | None = None,
+) -> list[Analysis]:
+    """Um ciclo de coleta e análise. Não imprime nada.
+
+    Separado da apresentação porque tanto o terminal quanto a interface web
+    consomem o mesmo resultado.
+    """
     # Odds pré-jogo primeiro: são elas que dão o baseline honesto. O snapshot
     # só é gravado uma vez por evento — em modo watch, regravar o mesmo
     # pré-jogo a cada minuto só engorda o banco.
@@ -152,38 +156,50 @@ def run_live_cycle(
         if store and novo:
             store.save_snapshot(event)
 
-    events = list(provider.fetch_live())
-    if not events:
-        print("Nenhum jogo ao vivo no momento.")
-        return
-
-    sem_baseline = 0
-    mostrados = 0
-
-    for event in events:
+    analises: list[Analysis] = []
+    for event in provider.fetch_live():
         if store:
             store.save_snapshot(event)
         analysis = (
-            pipeline.analyze_with_ai(event, analyst, args.context)
+            pipeline.analyze_with_ai(event, analyst, context)
             if analyst
             else pipeline.analyze(event)
         )
         if store:
             store.save_analysis(analysis)
+        analises.append(analysis)
+    return analises
 
-        if analysis.baseline_source == "live_inverted":
-            sem_baseline += 1
+
+def run_live_cycle(
+    provider: Provider,
+    store: Store | None,
+    pipeline: Pipeline,
+    analyst,
+    args: argparse.Namespace,
+) -> None:
+    """Um ciclo de análise ao vivo, imprimindo no terminal."""
+    analises = collect_live_analyses(
+        provider, store, pipeline, analyst, getattr(args, "context", None)
+    )
+    if not analises:
+        print("Nenhum jogo ao vivo no momento.")
+        return
+
+    sem_baseline = sum(1 for a in analises if a.baseline_source == "live_inverted")
+    mostrados = 0
+    for analysis in analises:
         if getattr(args, "apenas_valor", False) and not analysis.value_bets:
             continue
         print_analysis(analysis, verbose=args.verbose)
         mostrados += 1
 
-    print(f"\n{DIM}{len(events)} jogos ao vivo, {mostrados} exibidos.{RESET}")
+    print(f"\n{DIM}{len(analises)} jogos ao vivo, {mostrados} exibidos.{RESET}")
     if sem_baseline:
         print(
             f"{YELLOW}{sem_baseline} sem odds pré-jogo{RESET} — sem baseline não há como "
-            f"discordar do mercado. {DIM}Rode `bet-ai upcoming` antes dos jogos "
-            f"começarem para capturá-lo.{RESET}"
+            f"discordar do mercado. {DIM}Deixe o `watch` rodando para capturá-lo no "
+            f"início dos jogos.{RESET}"
         )
 
 
@@ -240,6 +256,49 @@ def cmd_watch(args: argparse.Namespace, settings: Settings) -> int:
     except KeyboardInterrupt:
         print("\nEncerrado.")
     finally:
+        provider.close()
+        if store:
+            store.close()
+    return 0
+
+
+def cmd_web(args: argparse.Namespace, settings: Settings) -> int:
+    """Sobe a interface no navegador e atualiza sozinha."""
+    import threading
+    import webbrowser
+
+    from .web import Estado, loop_de_coleta, servir
+
+    provider = build_provider(settings)
+    store = Store(settings.db_path) if not args.no_store else None
+    pipeline = build_pipeline(settings, store)
+    analyst = build_analyst(args, settings)
+
+    estado = Estado(intervalo=args.interval)
+    parar = threading.Event()
+
+    def coletar() -> list[Analysis]:
+        return collect_live_analyses(provider, store, pipeline, analyst, args.context)
+
+    coletor = threading.Thread(
+        target=loop_de_coleta, args=(estado, coletar, args.interval, parar), daemon=True
+    )
+    coletor.start()
+
+    servidor = servir(estado, args.host, args.port)
+    endereco = f"http://{'localhost' if args.host in ('', '0.0.0.0') else args.host}:{args.port}"
+    print(f"Interface em {BOLD}{endereco}{RESET}  {DIM}(Ctrl-C para parar){RESET}")
+    print(f"{DIM}Atualizando a cada {args.interval}s.{RESET}")
+    if not args.sem_navegador:
+        webbrowser.open(endereco)
+
+    try:
+        servidor.serve_forever()
+    except KeyboardInterrupt:
+        print("\nEncerrando.")
+    finally:
+        parar.set()
+        servidor.shutdown()
         provider.close()
         if store:
             store.close()
@@ -536,6 +595,19 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--ai", action="store_true")
     watch.add_argument("--context")
     watch.set_defaults(func=cmd_watch)
+
+    web = sub.add_parser("web", help="abre a interface no navegador")
+    add_common(web)
+    web.add_argument("--port", type=int, default=8000)
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--interval", type=int, default=60, help="segundos entre coletas")
+    web.add_argument(
+        "--sem-navegador", action="store_true", dest="sem_navegador",
+        help="não abre o navegador automaticamente",
+    )
+    web.add_argument("--ai", action="store_true", help="ativa a revisão do Claude")
+    web.add_argument("--context", help="contexto externo passado à IA")
+    web.set_defaults(func=cmd_web)
 
     history = sub.add_parser("history", help="lista eventos já capturados")
     history.set_defaults(func=cmd_history)
