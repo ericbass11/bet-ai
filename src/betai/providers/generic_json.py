@@ -241,13 +241,28 @@ class GenericJsonProvider(Provider):
             markets=markets,
         )
 
+    def _get_json(self) -> Any:
+        """Busca e decodifica a resposta, com plano B para compressão.
+
+        Alguns CDNs devolvem Brotli mesmo quando o cliente não anunciou
+        suporte, e a descompressão falha com "incorrect header check". Nesse
+        caso repetimos pedindo a resposta sem compressão.
+        """
+        try:
+            resp = self.client.get(self.map.url, params=self.map.params)
+        except httpx.DecodingError:
+            self.limiter.wait()
+            resp = self.client.get(
+                self.map.url, params=self.map.params, headers={"Accept-Encoding": "identity"}
+            )
+        resp.raise_for_status()
+        return resp.json()
+
     def fetch_live(self) -> Iterable[Event]:
         self._check_robots()
         self.limiter.wait()
         try:
-            resp = self.client.get(self.map.url, params=self.map.params)
-            resp.raise_for_status()
-            payload = resp.json()
+            payload = self._get_json()
         except httpx.HTTPError as exc:
             raise ProviderError(f"falha ao ler {self.map.url}: {exc}") from exc
         except ValueError as exc:

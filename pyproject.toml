@@ -7,6 +7,11 @@ dependencies = [
     "anthropic>=0.69",
     "httpx>=0.27",
     "pydantic>=2.7",
+    # CDNs de casas de apostas (Fastly, Cloudflare) servem Brotli e zstd. Sem
+    # estes, o httpx anuncia só gzip/deflate e falha ao descomprimir a
+    # resposta com "incorrect header check".
+    "brotli>=1.1",
+    "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]

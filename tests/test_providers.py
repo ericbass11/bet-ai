@@ -170,3 +170,64 @@ def test_odds_invalidas_sao_ignoradas(provider):
     event = provider._parse_event(payload)
     mo = event.market(MarketKey.MATCH_ODDS)
     assert [s.outcome for s in mo.selections] == ["away"]
+
+
+# ---------- compressão ----------
+
+
+def test_httpx_anuncia_brotli_e_zstd():
+    """CDNs de casas de apostas servem Brotli; sem isto a resposta não abre."""
+    import httpx
+
+    aceita = httpx.Client().headers.get("accept-encoding", "")
+    assert "br" in aceita
+    assert "zstd" in aceita
+
+
+def test_repete_sem_compressao_quando_a_descompressao_falha():
+    """Alguns CDNs mandam Brotli mesmo sem o cliente pedir.
+
+    O erro é 'incorrect header check' e não tem nada a ver com o mapeamento —
+    então o provedor repete pedindo a resposta sem compressão.
+    """
+    import httpx
+
+    spec = json.loads(FIELD_MAP.read_text(encoding="utf-8"))
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False, min_interval=0.0)
+
+    tentativas: list[dict] = []
+
+    class ClienteFalso:
+        def get(self, url, params=None, headers=None):
+            tentativas.append(headers or {})
+            if len(tentativas) == 1:
+                raise httpx.DecodingError("incorrect header check")
+            return httpx.Response(
+                200,
+                json={"data": {"events": []}},
+                request=httpx.Request("GET", url),
+            )
+
+    provider.client = ClienteFalso()
+    assert provider._get_json() == {"data": {"events": []}}
+    assert len(tentativas) == 2
+    assert tentativas[1]["Accept-Encoding"] == "identity"
+
+
+def test_erro_de_rede_continua_sendo_erro():
+    """O plano B é só para compressão — não pode mascarar falha real."""
+    import httpx
+
+    import pytest as _pytest
+
+    spec = json.loads(FIELD_MAP.read_text(encoding="utf-8"))
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False, min_interval=0.0)
+
+    class ClienteQuebrado:
+        def get(self, url, params=None, headers=None):
+            raise httpx.ConnectError("sem rede")
+
+    provider.client = ClienteQuebrado()
+    with _pytest.raises(Exception) as exc:
+        list(provider.fetch_live())
+    assert "falha ao ler" in str(exc.value)
