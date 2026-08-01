@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,11 +63,16 @@ class Store:
 
     def __init__(self, path: str | Path = "bet-ai.db") -> None:
         self.path = str(path)
-        self.conn = sqlite3.connect(self.path)
+        # `check_same_thread=False` porque a interface web coleta numa thread
+        # e o processo principal serve noutra. O sqlite3 proíbe isso por
+        # padrão para evitar corrida — aqui a corrida é evitada pelo lock
+        # abaixo, que serializa todo acesso à conexão.
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        with closing(self.conn.cursor()) as cur:
+        self._lock = threading.Lock()
+        with self._lock, closing(self.conn.cursor()) as cur:
             cur.executescript(SCHEMA)
-        self.conn.commit()
+            self.conn.commit()
 
     def __enter__(self) -> "Store":
         return self
@@ -75,13 +81,14 @@ class Store:
         self.close()
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            self.conn.close()
 
     # ---------- escrita ----------
 
     def save_snapshot(self, event: Event) -> int:
         """Grava o estado + odds de um evento num instante."""
-        with closing(self.conn.cursor()) as cur:
+        with self._lock, closing(self.conn.cursor()) as cur:
             cur.execute(
                 """INSERT INTO snapshots
                    (event_id, source, league, home_team, away_team, captured_at,
@@ -104,7 +111,7 @@ class Store:
             return int(cur.lastrowid or 0)
 
     def save_analysis(self, analysis: Analysis) -> int:
-        with closing(self.conn.cursor()) as cur:
+        with self._lock, closing(self.conn.cursor()) as cur:
             cur.execute(
                 """INSERT INTO analyses
                    (event_id, created_at, minute, lambda_home, lambda_away,
@@ -126,7 +133,7 @@ class Store:
 
     def save_result(self, event_id: str, score_home: int, score_away: int) -> None:
         """Registra o placar final. É o que fecha o ciclo para backtest."""
-        with closing(self.conn.cursor()) as cur:
+        with self._lock, closing(self.conn.cursor()) as cur:
             cur.execute(
                 """INSERT OR REPLACE INTO results (event_id, score_home, score_away, settled_at)
                    VALUES (?, ?, ?, ?)""",
@@ -138,7 +145,7 @@ class Store:
 
     def snapshots_for(self, event_id: str) -> list[Event]:
         """Linha do tempo completa de um evento, em ordem de captura."""
-        with closing(self.conn.cursor()) as cur:
+        with self._lock, closing(self.conn.cursor()) as cur:
             rows = cur.execute(
                 "SELECT payload FROM snapshots WHERE event_id = ? ORDER BY captured_at",
                 (event_id,),
@@ -147,7 +154,7 @@ class Store:
 
     def tracked_events(self) -> list[sqlite3.Row]:
         """Um registro por evento visto, com contagem de snapshots."""
-        with closing(self.conn.cursor()) as cur:
+        with self._lock, closing(self.conn.cursor()) as cur:
             return cur.execute(
                 """SELECT event_id, league, home_team, away_team,
                           COUNT(*) AS snapshots,
@@ -158,8 +165,13 @@ class Store:
                    ORDER BY last_seen DESC"""
             ).fetchall()
 
-    def value_bet_history(self, event_id: str | None = None) -> Iterable[dict]:
-        """Todas as apostas de valor registradas, com o placar final se houver."""
+    def value_bet_history(self, event_id: str | None = None) -> list[dict]:
+        """Todas as apostas de valor registradas, com o placar final se houver.
+
+        Devolve uma lista, não um gerador: um gerador manteria o lock aberto
+        durante a iteração, e qualquer chamada ao banco feita pelo consumidor
+        no meio do laço travaria o processo.
+        """
         query = """SELECT a.event_id, a.created_at, a.minute, a.value_bets,
                           r.score_home, r.score_away
                    FROM analyses a
@@ -170,17 +182,21 @@ class Store:
             params = (event_id,)
         query += " ORDER BY a.created_at"
 
-        with closing(self.conn.cursor()) as cur:
-            for row in cur.execute(query, params):
-                for bet in json.loads(row["value_bets"]):
-                    yield {
-                        "event_id": row["event_id"],
-                        "created_at": row["created_at"],
-                        "minute": row["minute"],
-                        "final_score": (
-                            None
-                            if row["score_home"] is None
-                            else (row["score_home"], row["score_away"])
-                        ),
-                        **bet,
-                    }
+        with self._lock, closing(self.conn.cursor()) as cur:
+            rows = cur.execute(query, params).fetchall()
+
+        return [
+            {
+                "event_id": row["event_id"],
+                "created_at": row["created_at"],
+                "minute": row["minute"],
+                "final_score": (
+                    None
+                    if row["score_home"] is None
+                    else (row["score_home"], row["score_away"])
+                ),
+                **bet,
+            }
+            for row in rows
+            for bet in json.loads(row["value_bets"])
+        ]

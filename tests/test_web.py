@@ -180,3 +180,70 @@ def test_pagina_avisa_sobre_o_risco():
 
     assert "não recomendação de aposta" in PAGINA
     assert "não é lucro garantido" in PAGINA
+
+
+# ---------- banco entre threads ----------
+
+
+def test_banco_funciona_a_partir_de_outra_thread(tmp_path):
+    """O defeito que quebrou a interface web na primeira execução.
+
+    O sqlite3 recusa uma conexão usada fora da thread que a criou. A web abre
+    o banco no processo principal e coleta numa thread separada.
+    """
+    from betai.storage import Store
+
+    with Store(tmp_path / "t.db") as store:
+        erro: list[Exception] = []
+
+        def gravar():
+            try:
+                store.save_snapshot(make_event(event_id="de-outra-thread"))
+                store.save_analysis(_analise_com_valor())
+                store.tracked_events()
+                store.value_bet_history()
+            except Exception as exc:
+                erro.append(exc)
+
+        t = threading.Thread(target=gravar)
+        t.start()
+        t.join()
+
+        assert not erro, f"o banco recusou o acesso: {erro[0]}"
+        assert store.snapshots_for("de-outra-thread")
+
+
+def test_escritas_concorrentes_nao_se_atropelam(tmp_path):
+    """O lock serializa o acesso; sem ele, escritas simultâneas corrompem."""
+    from betai.storage import Store
+
+    with Store(tmp_path / "t.db") as store:
+        erros: list[Exception] = []
+
+        def gravar(n):
+            try:
+                for i in range(10):
+                    store.save_snapshot(make_event(event_id=f"j{n}-{i}"))
+            except Exception as exc:
+                erros.append(exc)
+
+        threads = [threading.Thread(target=gravar, args=(n,)) for n in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not erros, erros
+        assert len(store.tracked_events()) == 40
+
+
+def test_leitura_nao_segura_o_lock_durante_o_laco(tmp_path):
+    """value_bet_history devolvendo gerador travaria quem consultasse o banco
+    dentro do próprio laço."""
+    from betai.storage import Store
+
+    with Store(tmp_path / "t.db") as store:
+        store.save_analysis(_analise_com_valor())
+        store.save_snapshot(make_event(event_id="x"))
+        for _ in store.value_bet_history():
+            store.tracked_events()  # travaria se o lock ainda estivesse preso
