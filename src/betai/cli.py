@@ -373,17 +373,38 @@ def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Nenhuma resposta com '{args.contendo}' na URL.", file=sys.stderr)
         return 1
 
-    melhor = None
+    # Uma resposta por URL, com o melhor candidato de cada. Mostrar só o
+    # vencedor global esconde o endpoint por evento: a lista geral tem 195
+    # jogos e ganha na pontuação, mesmo trazendo menos mercados.
+    achados: list[tuple[str, Any]] = []
     for url, payload in payloads:
-        for cand in (score_candidate(c) for c in walk_arrays(payload)):
-            if melhor is None or cand.score > melhor[1].score:
-                melhor = (url, cand)
+        candidatos = [c for c in (score_candidate(c) for c in walk_arrays(payload)) if c.items]
+        if candidatos:
+            achados.append((url, max(candidatos, key=lambda c: c.score)))
 
-    if melhor is None or not melhor[1].items:
+    if not achados:
         print("Nenhuma lista de eventos encontrada.", file=sys.stderr)
         return 1
 
-    url, cand = melhor
+    achados.sort(key=lambda par: len(market_labels(par[1].items[0])), reverse=True)
+
+    print(f"{BOLD}Respostas com jogos nesta captura{RESET} "
+          f"(ordenadas por quantidade de mercados):")
+    for i, (url, cand) in enumerate(achados):
+        mercados = market_labels(cand.items[0])
+        curta = url.split("?")[0].rsplit("/", 2)
+        curta = "/".join(curta[-2:]) if len(curta) > 1 else url
+        print(
+            f"  [{i}] {len(cand.items):>4} jogos · {len(mercados):>2} mercados"
+            f"  {DIM}…/{curta}{RESET}"
+        )
+    print(f"\n{DIM}Use --indice N para detalhar outra. Detalhando a [{args.indice}]:{RESET}\n")
+
+    if not 0 <= args.indice < len(achados):
+        print(f"Índice fora da faixa (0 a {len(achados) - 1}).", file=sys.stderr)
+        return 1
+
+    url, cand = achados[args.indice]
     evento = cand.items[0]
 
     print(f"{BOLD}Origem{RESET}: {url}")
@@ -509,6 +530,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect.add_argument("captura", help="arquivo .har ou .json")
     inspect.add_argument("--contendo", help="filtra pelas URLs que contenham este texto")
+    inspect.add_argument(
+        "--indice", type=int, default=0, help="qual das respostas detalhar (padrão 0)"
+    )
     inspect.add_argument("--limite", type=int, default=6000, help="máximo de caracteres")
     inspect.set_defaults(func=cmd_inspect)
 
