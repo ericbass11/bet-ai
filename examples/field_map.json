@@ -1,0 +1,86 @@
+{
+  "_comentario": [
+    "Mapeamento de exemplo para o provedor generic_json.",
+    "Descreve onde cada campo vive no JSON do provedor, para não precisar de",
+    "código novo a cada casa. Os caminhos são pontilhados e aceitam índices de",
+    "lista: 'teams.0.name'.",
+    "",
+    "A URL abaixo é fictícia. Antes de apontar para um site real, leia os",
+    "Termos de Uso dele — o provedor respeita robots.txt e aplica rate limit,",
+    "mas a decisão é sua."
+  ],
+
+  "url": "https://exemplo-casa-de-apostas.com/api/v2/inplay/soccer",
+  "events_path": "data.events",
+
+  "headers": {
+    "Accept": "application/json",
+    "Referer": "https://exemplo-casa-de-apostas.com/"
+  },
+  "params": {
+    "sport": "soccer"
+  },
+
+  "fields": {
+    "event_id": "id",
+    "league": "competition.name",
+    "home_team": "participants.0.name",
+    "away_team": "participants.1.name",
+    "minute": "clock.minutes",
+    "score_home": "score.home",
+    "score_away": "score.away",
+    "red_cards_home": "cards.red.home",
+    "red_cards_away": "cards.red.away"
+  },
+
+  "markets": [
+    {
+      "key": "1x2",
+      "path": "markets.match_result.selections",
+      "outcome_field": "label",
+      "odds_field": "decimal_odds",
+      "outcome_map": {
+        "1": "home",
+        "X": "draw",
+        "2": "away",
+        "Casa": "home",
+        "Empate": "draw",
+        "Fora": "away"
+      }
+    },
+    {
+      "key": "over_under",
+      "line": 2.5,
+      "path": "markets.total_goals_2_5.selections",
+      "outcome_field": "label",
+      "odds_field": "decimal_odds",
+      "outcome_map": {
+        "Mais de 2.5": "over",
+        "Menos de 2.5": "under",
+        "Over": "over",
+        "Under": "under"
+      }
+    },
+    {
+      "key": "btts",
+      "path": "markets.both_teams_to_score.selections",
+      "outcome_field": "label",
+      "odds_field": "decimal_odds",
+      "outcome_map": {
+        "Sim": "yes",
+        "Não": "no"
+      }
+    },
+    {
+      "key": "asian_handicap",
+      "path": "markets.asian_handicap.selections",
+      "outcome_field": "side",
+      "odds_field": "decimal_odds",
+      "line_field": "handicap",
+      "outcome_map": {
+        "home": "home",
+        "away": "away"
+      }
+    }
+  ]
+}

@@ -1,0 +1,254 @@
+"""Pipeline de análise: das odds cruas às apostas de valor.
+
+O fluxo, e o porquê de cada etapa:
+
+1. **Devig** das odds da casa → probabilidades justas do mercado.
+2. **Baseline**: taxas de gols para 90 minutos, calibradas pelas odds
+   *pré-jogo*. É a única etapa em que copiamos o mercado de propósito — o
+   mercado pré-jogo é eficiente, e discordar dele sem informação privada é
+   arrogância.
+3. **Modelo ao vivo**: aplica tempo restante, placar e cartões sobre o
+   baseline. É *aqui* que nasce a divergência, porque o modelo de tempo/placar
+   da casa pode ser pior que o nosso.
+4. **Comparação** contra as odds ao vivo → EV, edge, Kelly.
+5. **IA** (opcional) ajusta pontualmente o que o modelo não consegue enxergar.
+
+Se não houver baseline pré-jogo, o passo 2 inverte as odds ao vivo — e nesse
+caso o modelo concorda com o mercado por construção. O pipeline sinaliza isso
+via `baseline_source` em vez de fingir que encontrou valor.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from .engine.devig import Method, remove_vig
+from .engine.live import LiveConfig, live_matrix
+from .engine.poisson import DEFAULT_RHO, ScoreMatrix, calibrate
+from .engine.value import evaluate, filter_value
+from .models import Analysis, Event, MarketKey, ValueBet
+from .storage import Store
+
+
+def market_probabilities(event: Event, method: Method = "power") -> dict[str, float]:
+    """Probabilidades justas do mercado, uma chave por seleção.
+
+    Chaves seguem o formato `mercado[@linha].seleção`, ex: `over_under@2.5.over`.
+    """
+    out: dict[str, float] = {}
+    for mkt in event.markets:
+        odds = [s.odds for s in mkt.selections]
+        if len(odds) < 2:
+            continue
+        fair = remove_vig(odds, method)
+        suffix = f"@{mkt.line}" if mkt.line is not None else ""
+        for sel, p in zip(mkt.selections, fair):
+            out[f"{mkt.key.value}{suffix}.{sel.outcome}"] = p
+    return out
+
+
+def model_probabilities(matrix: ScoreMatrix, event: Event) -> dict[str, float]:
+    """Probabilidades do modelo, nas mesmas chaves do mercado.
+
+    Só gera linhas que a casa realmente oferece — não adianta ter opinião
+    sobre um mercado inexistente.
+    """
+    out: dict[str, float] = {}
+
+    for outcome, p in matrix.match_odds().items():
+        out[f"{MarketKey.MATCH_ODDS.value}.{outcome}"] = p
+    for outcome, p in matrix.double_chance().items():
+        out[f"{MarketKey.DOUBLE_CHANCE.value}.{outcome}"] = p
+    for outcome, p in matrix.btts().items():
+        out[f"{MarketKey.BTTS.value}.{outcome}"] = p
+
+    for mkt in event.markets_of(MarketKey.OVER_UNDER):
+        line = mkt.line if mkt.line is not None else 2.5
+        ou = matrix.over_under(line)
+        out[f"{MarketKey.OVER_UNDER.value}@{line}.over"] = ou["over"]
+        out[f"{MarketKey.OVER_UNDER.value}@{line}.under"] = ou["under"]
+
+    for mkt in event.markets_of(MarketKey.ASIAN_HANDICAP):
+        line = mkt.line if mkt.line is not None else 0.0
+        ah = matrix.asian_handicap(line)
+        out[f"{MarketKey.ASIAN_HANDICAP.value}@{line}.home"] = ah["home"]
+        out[f"{MarketKey.ASIAN_HANDICAP.value}@{line}.away"] = ah["away"]
+
+    return out
+
+
+def _fair_inputs(event: Event, method: Method) -> tuple[float | None, float | None, float | None, float]:
+    """Extrai P(casa), P(fora), P(over) e a linha do over das odds do evento."""
+    p_home = p_away = p_over = None
+    over_line = 2.5
+
+    mo = event.market(MarketKey.MATCH_ODDS)
+    if mo and len(mo.selections) >= 3:
+        fair = remove_vig([s.odds for s in mo.selections], method)
+        by_outcome = dict(zip([s.outcome for s in mo.selections], fair))
+        p_home = by_outcome.get("home")
+        p_away = by_outcome.get("away")
+
+    ou_markets = event.markets_of(MarketKey.OVER_UNDER)
+    if ou_markets:
+        # A linha mais próxima de 2.5 é a mais líquida e a mais informativa.
+        mkt = min(ou_markets, key=lambda m: abs((m.line or 2.5) - 2.5))
+        fair = remove_vig([s.odds for s in mkt.selections], method)
+        by_outcome = dict(zip([s.outcome for s in mkt.selections], fair))
+        p_over = by_outcome.get("over")
+        over_line = mkt.line if mkt.line is not None else 2.5
+
+    return p_home, p_away, p_over, over_line
+
+
+def derive_baseline(
+    event: Event,
+    method: Method = "power",
+    prior_total: float = 2.7,
+    rho: float = DEFAULT_RHO,
+) -> tuple[float, float]:
+    """Taxas de gols para 90 minutos a partir das odds pré-jogo do evento."""
+    p_home, p_away, p_over, over_line = _fair_inputs(event, method)
+    return calibrate(
+        p_home=p_home,
+        p_away=p_away,
+        p_over=p_over,
+        over_line=over_line,
+        prior_total=prior_total,
+        rho=rho,
+    )
+
+
+@dataclass
+class Pipeline:
+    """Orquestra devig → baseline → modelo ao vivo → valor."""
+
+    devig_method: Method = "power"
+    prior_total: float = 2.7
+    live_config: LiveConfig = field(default_factory=LiveConfig)
+    min_edge: float = 0.03
+    kelly_fraction: float = 0.25
+    store: Store | None = None
+    _baselines: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    def register_baseline(self, event: Event) -> None:
+        """Guarda o baseline de um evento a partir de um snapshot pré-jogo."""
+        if event.state.is_live:
+            return
+        self._baselines[event.event_id] = derive_baseline(
+            event, self.devig_method, self.prior_total, self.live_config.rho
+        )
+
+    def _baseline_for(self, event: Event) -> tuple[tuple[float, float], str]:
+        """Encontra o melhor baseline disponível e diz de onde ele veio."""
+        if event.event_id in self._baselines:
+            return self._baselines[event.event_id], "pre_match"
+
+        # Procura no histórico um snapshot anterior ao apito inicial.
+        if self.store is not None:
+            for snap in self.store.snapshots_for(event.event_id):
+                if not snap.state.is_live and snap.markets:
+                    baseline = derive_baseline(
+                        snap, self.devig_method, self.prior_total, self.live_config.rho
+                    )
+                    self._baselines[event.event_id] = baseline
+                    return baseline, "pre_match"
+
+        if not event.state.is_live:
+            baseline = derive_baseline(
+                event, self.devig_method, self.prior_total, self.live_config.rho
+            )
+            self._baselines[event.event_id] = baseline
+            return baseline, "pre_match"
+
+        # Última alternativa: inverter as odds ao vivo. Devolve as taxas dos
+        # gols restantes, então precisam ser reescaladas para 90 minutos.
+        from .engine.live import remaining_fraction
+
+        p_home, p_away, p_over, over_line = _fair_inputs(event, self.devig_method)
+        rem_h, rem_a = calibrate(
+            p_home=p_home,
+            p_away=p_away,
+            p_over=p_over,
+            over_line=over_line,
+            prior_total=self.prior_total,
+            rho=self.live_config.rho,
+            base_home=event.state.score_home,
+            base_away=event.state.score_away,
+        )
+        remaining = max(remaining_fraction(event.state.minute), 0.05)
+        return (rem_h / remaining, rem_a / remaining), "live_inverted"
+
+    def analyze(self, event: Event) -> Analysis:
+        """Análise completa de um evento, sem a camada de IA."""
+        (lam_home, lam_away), source = self._baseline_for(event)
+
+        matrix = live_matrix(lam_home, lam_away, event.state, self.live_config)
+        model = model_probabilities(matrix, event)
+        market = market_probabilities(event, self.devig_method)
+
+        return Analysis(
+            event=event,
+            lambda_home=lam_home,
+            lambda_away=lam_away,
+            baseline_source=source,
+            probabilities=model,
+            value_bets=self._find_value(event, model, market),
+        )
+
+    def _find_value(
+        self,
+        event: Event,
+        model: dict[str, float],
+        market: dict[str, float],
+    ) -> list[ValueBet]:
+        bets: list[ValueBet] = []
+        for mkt in event.markets:
+            suffix = f"@{mkt.line}" if mkt.line is not None else ""
+            for sel in mkt.selections:
+                key = f"{mkt.key.value}{suffix}.{sel.outcome}"
+                if key not in model or key not in market:
+                    continue
+                bets.append(
+                    evaluate(
+                        market=mkt.key,
+                        outcome=sel.outcome,
+                        odds=sel.odds,
+                        model_probability=model[key],
+                        market_probability=market[key],
+                        line=mkt.line if mkt.line is not None else sel.line,
+                        kelly_fraction=self.kelly_fraction,
+                    )
+                )
+        return filter_value(bets, min_edge=self.min_edge)
+
+    def analyze_with_ai(
+        self,
+        event: Event,
+        analyst,  # betai.ai.Analyst — importado tarde para não exigir a dependência
+        context: str | None = None,
+    ) -> Analysis:
+        """Análise quantitativa seguida da revisão da IA.
+
+        Se a chamada à IA falhar, devolve a análise quantitativa intacta — o
+        motor não depende do modelo de linguagem para funcionar.
+        """
+        from .ai.analyst import apply_adjustments
+
+        analysis = self.analyze(event)
+        try:
+            verdict = analyst.review(analysis, context)
+        except Exception as exc:  # rede, cota, schema — nada disso invalida o modelo
+            analysis.ai_summary = f"[IA indisponível: {exc}]"
+            return analysis
+
+        adjusted = apply_adjustments(
+            analysis.probabilities, verdict, max_shift=analyst.max_shift
+        )
+        market = market_probabilities(event, self.devig_method)
+
+        analysis.probabilities = adjusted
+        analysis.ai_summary = verdict.summary
+        analysis.ai_adjustments = {a.key: a.delta for a in verdict.adjustments}
+        analysis.value_bets = self._find_value(event, adjusted, market)
+        return analysis
