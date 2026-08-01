@@ -232,30 +232,30 @@ def _dig(data: Any, path: str) -> Any:
 
 
 def infer_markets(sample: dict) -> list[dict[str, Any]]:
-    """Encontra as listas de seleções apostáveis e como ler cada uma."""
+    """Encontra as seleções apostáveis e como ler cada mercado.
+
+    Quando a casa achata vários mercados num array só — o padrão mais comum —
+    cada mercado vira uma entrada com `filter_field`/`filter_value`, para o
+    provedor recortar a fatia certa.
+    """
     markets: list[dict[str, Any]] = []
 
-    for cand in walk_arrays(sample):
-        if not cand.path or not cand.items:
-            continue
-        item = cand.items[0]
-        odds_key = next((k for k in item if _matches(k, ODDS_KEYS) and _plausible_odds(item[k])), None)
-        if not odds_key:
-            continue
-        label_key = next((k for k in item if _matches(k, LABEL_KEYS) and isinstance(item[k], str)), None)
-        line_key = next(
-            (k for k in item if _matches(k, LINE_KEYS) and isinstance(item[k], (int, float))), None
-        )
-
-        rotulos = sorted({str(_dig(i, label_key)) for i in cand.items if label_key})
+    for grupo in market_labels(sample):
         markets.append(
             {
-                "key": _guess_market_key(rotulos, len(cand.items)),
-                "path": cand.path,
-                "outcome_field": label_key or "name",
-                "odds_field": odds_key,
-                **({"line_field": line_key} if line_key else {}),
-                "_rotulos_encontrados": rotulos[:8],
+                "key": _guess_market_key(grupo.labels, len(grupo.labels)),
+                "path": grupo.path,
+                "outcome_field": grupo.label_field,
+                "odds_field": grupo.odds_field,
+                **(
+                    {"filter_field": grupo.name_field, "filter_value": grupo.name}
+                    if grupo.name_field
+                    else {}
+                ),
+                **({"line_field": grupo.line_field} if grupo.line_field else {}),
+                "_nome_na_casa": grupo.name,
+                "_rotulos_encontrados": grupo.labels[:8],
+                **({"_linhas_encontradas": grupo.line} if grupo.line else {}),
                 "_precisa_revisao": True,
             }
         )
@@ -323,6 +323,119 @@ def build_field_map(url: str, payload: Any) -> dict[str, Any] | None:
         "fields": fields,
         "markets": markets,
     }
+
+
+def summarize(value: Any, depth: int = 0, max_depth: int = 6, max_items: int = 3) -> Any:
+    """Reduz um objeto a uma amostra legível da sua estrutura.
+
+    Listas longas viram os primeiros itens mais uma contagem, textos longos são
+    cortados. O objetivo é caber na tela e mostrar o formato — não os dados.
+    """
+    if depth > max_depth:
+        return "..."
+    if isinstance(value, dict):
+        return {k: summarize(v, depth + 1, max_depth, max_items) for k, v in value.items()}
+    if isinstance(value, list):
+        amostra = [summarize(v, depth + 1, max_depth, max_items) for v in value[:max_items]]
+        if len(value) > max_items:
+            amostra.append(f"... (+{len(value) - max_items} itens)")
+        return amostra
+    if isinstance(value, str) and len(value) > 120:
+        return value[:120] + "..."
+    return value
+
+
+def _merge_keys(items: list[dict], limit: int = 40) -> dict:
+    """Junta os itens numa amostra com todos os campos que aparecem.
+
+    O primeiro valor não-nulo de cada campo vence, para que a checagem de tipo
+    ("isto é texto?", "isto é uma odd plausível?") tenha o que examinar.
+    """
+    merged: dict = {}
+    for item in items[:limit]:
+        for key, value in item.items():
+            if value is not None and (key not in merged or merged[key] is None):
+                merged[key] = value
+    return merged
+
+
+@dataclass
+class MarketSample:
+    """Um mercado observado na captura, com os rótulos que a casa usa."""
+
+    path: str
+    name: str
+    label_field: str
+    labels: list[str]
+    odds_field: str
+    name_field: str | None = None
+    line_field: str | None = None
+    line: str | None = None
+
+
+def market_labels(sample: dict) -> list[MarketSample]:
+    """Agrupa as seleções por mercado e lista os rótulos de cada um.
+
+    É o que falta para escrever o `outcome_map`: saber que a casa chama o
+    empate de "X", de "Draw" ou de "0" — e que "Total goluri" é over/under.
+
+    Casas que achatam todos os mercados num único array (o padrão mais comum)
+    são desagrupadas aqui pelo campo de nome do mercado.
+    """
+    encontrados: list[MarketSample] = []
+
+    for cand in walk_arrays(sample):
+        if not cand.path:
+            continue
+        # Num array achatado as seleções não têm todas os mesmos campos: a do
+        # 1X2 não traz linha, a do over/under traz. Olhar só o primeiro item
+        # perderia o campo de linha inteiro.
+        item = _merge_keys(cand.items)
+        odds_key = next(
+            (k for k in item if _matches(k, ODDS_KEYS) and _plausible_odds(item[k])), None
+        )
+        if not odds_key:
+            continue
+
+        # O nome do mercado tem que ser texto: `marketId: 8` identifica, mas
+        # não diz nada; `marketName: "Total de Gols"` é o que orienta o mapa.
+        candidatos_nome = [k for k in item if re.search(r"market|mercado|bet_?type", k.lower())]
+        nome_key = next(
+            (k for k in candidatos_nome if isinstance(item[k], str)),
+            next(iter(candidatos_nome), None),
+        )
+        label_key = next(
+            (k for k in item if _matches(k, LABEL_KEYS) and isinstance(item[k], str)), None
+        )
+        if not label_key:
+            continue
+        line_key = next((k for k in item if _matches(k, LINE_KEYS + [r"special"])), None)
+
+        grupos: dict[str, list[dict]] = {}
+        for sel in cand.items:
+            nome = str(_dig(sel, nome_key)) if nome_key else "(mercado único)"
+            grupos.setdefault(nome, []).append(sel)
+
+        for nome, selecoes in grupos.items():
+            linhas = (
+                sorted({str(_dig(s, line_key)) for s in selecoes if _dig(s, line_key) is not None})
+                if line_key
+                else []
+            )
+            encontrados.append(
+                MarketSample(
+                    path=cand.path,
+                    name=nome,
+                    label_field=label_key,
+                    labels=sorted({str(_dig(s, label_key)) for s in selecoes})[:12],
+                    odds_field=odds_key,
+                    name_field=nome_key,
+                    line_field=line_key,
+                    line=", ".join(linhas[:6]) if linhas else None,
+                )
+            )
+
+    return encontrados
 
 
 def discover(payloads: list[tuple[str, Any]]) -> list[dict[str, Any]]:

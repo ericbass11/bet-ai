@@ -15,6 +15,7 @@ from betai.discover import (
     infer_markets,
     walk_arrays,
 )
+from betai.models import MarketKey
 from betai.providers import FieldMap, GenericJsonProvider
 
 
@@ -282,3 +283,129 @@ def test_mapa_inferido_funciona_com_participantes_em_lista():
     assert [e.label for e in eventos] == ["Santos x Vasco", "Bahia x Fortaleza"]
     assert eventos[0].markets[0].selection("home").odds == 1.85
     assert eventos[0].state.minute == 37
+
+
+# ---------- inspeção de mercados ----------
+
+PAYLOAD_ACHATADO = {
+    "data": [
+        {
+            "eventId": 8812345,
+            "team1Name": "Santos",
+            "team2Name": "Vasco",
+            "tournamentName": "Brasileirão",
+            "odds": [
+                {"marketId": 1, "marketName": "Resultado Final", "code": "1", "price": 1.85},
+                {"marketId": 1, "marketName": "Resultado Final", "code": "0", "price": 3.60},
+                {"marketId": 1, "marketName": "Resultado Final", "code": "2", "price": 4.20},
+                {"marketId": 8, "marketName": "Total de Gols", "code": "over",
+                 "price": 1.72, "specialBetValue": "2.5"},
+                {"marketId": 8, "marketName": "Total de Gols", "code": "under",
+                 "price": 2.05, "specialBetValue": "2.5"},
+            ],
+        }
+    ]
+}
+
+
+def test_desagrupa_mercados_achatados_num_unico_array():
+    """Casas costumam achatar todos os mercados num array só."""
+    from betai.discover import market_labels
+
+    mercados = market_labels(PAYLOAD_ACHATADO["data"][0])
+    nomes = {m.name for m in mercados}
+    assert nomes == {"Resultado Final", "Total de Gols"}
+
+
+def test_usa_o_nome_do_mercado_e_nao_o_id():
+    """`marketId: 8` identifica mas não informa; `marketName` é o que orienta."""
+    from betai.discover import market_labels
+
+    mercados = market_labels(PAYLOAD_ACHATADO["data"][0])
+    assert all(not m.name.isdigit() for m in mercados)
+
+
+def test_lista_os_rotulos_de_cada_mercado():
+    from betai.discover import market_labels
+
+    por_nome = {m.name: m for m in market_labels(PAYLOAD_ACHATADO["data"][0])}
+    assert por_nome["Resultado Final"].labels == ["0", "1", "2"]
+    assert por_nome["Total de Gols"].labels == ["over", "under"]
+
+
+def test_captura_a_linha_do_mercado():
+    from betai.discover import market_labels
+
+    por_nome = {m.name: m for m in market_labels(PAYLOAD_ACHATADO["data"][0])}
+    assert por_nome["Total de Gols"].line == "2.5"
+    assert por_nome["Resultado Final"].line is None
+
+
+def test_summarize_corta_listas_longas_e_preserva_a_forma():
+    from betai.discover import summarize
+
+    out = summarize({"itens": list(range(50)), "texto": "x" * 300, "n": 7})
+    assert out["itens"][:3] == [0, 1, 2]
+    assert "+47 itens" in out["itens"][-1]
+    assert out["texto"].endswith("...") and len(out["texto"]) < 130
+    assert out["n"] == 7
+
+
+def test_mercados_achatados_viram_entradas_separadas_com_filtro():
+    """O caso Superbet: um array `odds` com todos os mercados dentro.
+
+    Sem `filter_field`, o provedor leria 1X2 e over/under como se fossem o
+    mesmo mercado e a remoção de margem sairia sem sentido.
+    """
+    markets = infer_markets(PAYLOAD_ACHATADO["data"][0])
+    assert len(markets) == 2
+    por_nome = {m["_nome_na_casa"]: m for m in markets}
+
+    assert por_nome["Resultado Final"]["filter_field"] == "marketName"
+    assert por_nome["Resultado Final"]["filter_value"] == "Resultado Final"
+    assert por_nome["Resultado Final"]["key"] == "1x2"
+
+    assert por_nome["Total de Gols"]["key"] == "over_under"
+    assert por_nome["Total de Gols"]["line_field"] == "specialBetValue"
+
+
+def test_provedor_recorta_o_mercado_pelo_filtro():
+    """Fecha o ciclo: aplicar o mapa gerado tem que produzir dois mercados
+    distintos, cada um com as suas próprias seleções."""
+    fmap = build_field_map("https://x/api", PAYLOAD_ACHATADO)
+    por_nome = {m["_nome_na_casa"]: m for m in fmap["markets"]}
+    por_nome["Resultado Final"]["outcome_map"] = {"1": "home", "0": "draw", "2": "away"}
+    por_nome["Total de Gols"]["outcome_map"] = {"over": "over", "under": "under"}
+    por_nome["Total de Gols"]["line"] = 2.5
+
+    provider = GenericJsonProvider(FieldMap(fmap), respect_robots=False)
+    event = provider._parse_event(PAYLOAD_ACHATADO["data"][0])
+
+    mo = event.market(MarketKey.MATCH_ODDS)
+    assert [s.outcome for s in mo.selections] == ["home", "draw", "away"]
+    assert mo.selection("home").odds == 1.85
+
+    ou = event.market(MarketKey.OVER_UNDER)
+    assert [s.outcome for s in ou.selections] == ["over", "under"]
+    assert ou.selection("over").odds == 1.72
+
+
+def test_filtro_que_nao_casa_descarta_o_mercado():
+    from betai.providers.generic_json import FieldMap as FM
+
+    spec = {
+        "url": "u",
+        "fields": {"event_id": "eventId", "home_team": "team1Name", "away_team": "team2Name"},
+        "markets": [
+            {
+                "key": "1x2",
+                "path": "odds",
+                "outcome_field": "code",
+                "odds_field": "price",
+                "filter_field": "marketName",
+                "filter_value": "Mercado Inexistente",
+            }
+        ],
+    }
+    provider = GenericJsonProvider(FM(spec), respect_robots=False)
+    assert provider._parse_event(PAYLOAD_ACHATADO["data"][0]) is None

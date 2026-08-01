@@ -325,6 +325,68 @@ def cmd_discover(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
+    """Mostra a estrutura de um evento da captura, para montar o mapeamento.
+
+    Imprime apenas o corpo da resposta pública de odds — nunca cabeçalhos,
+    cookies ou dados de sessão, que é o que torna um HAR sensível.
+    """
+    from .discover import (
+        extract_from_har,
+        market_labels,
+        score_candidate,
+        summarize,
+        walk_arrays,
+    )
+
+    path = Path(args.captura)
+    if not path.exists():
+        print(f"Arquivo não encontrado: {path}", file=sys.stderr)
+        return 1
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    payloads = (
+        extract_from_har(raw)
+        if isinstance(raw, dict) and "entries" in raw.get("log", {})
+        else [("", raw)]
+    )
+    if args.contendo:
+        payloads = [(u, p) for u, p in payloads if args.contendo in u]
+    if not payloads:
+        print(f"Nenhuma resposta com '{args.contendo}' na URL.", file=sys.stderr)
+        return 1
+
+    melhor = None
+    for url, payload in payloads:
+        for cand in (score_candidate(c) for c in walk_arrays(payload)):
+            if melhor is None or cand.score > melhor[1].score:
+                melhor = (url, cand)
+
+    if melhor is None or not melhor[1].items:
+        print("Nenhuma lista de eventos encontrada.", file=sys.stderr)
+        return 1
+
+    url, cand = melhor
+    evento = cand.items[0]
+
+    print(f"{BOLD}Origem{RESET}: {url}")
+    print(f"{BOLD}Eventos em{RESET}: {cand.path or '(raiz)'} ({len(cand.items)} no total)\n")
+
+    print(f"{BOLD}Mercados encontrados{RESET} (para montar o outcome_map):")
+    mercados = market_labels(evento)
+    if mercados:
+        for m in mercados:
+            linha = f"  linha: {m.line}" if m.line else ""
+            print(f"  {BOLD}{m.name}{RESET}")
+            print(f"    {m.path}.{m.label_field} → {', '.join(m.labels)}{linha}")
+    else:
+        print(f"  {DIM}nenhum rótulo de texto encontrado{RESET}")
+
+    print(f"\n{BOLD}Estrutura de um evento{RESET}:")
+    print(json.dumps(summarize(evento), ensure_ascii=False, indent=2)[: args.limite])
+    return 0
+
+
 def cmd_probe(args: argparse.Namespace, settings: Settings) -> int:
     """Consulta uma URL e descreve o que voltou. Rode da sua própria máquina."""
     import httpx
@@ -413,6 +475,15 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--url", help="URL do endpoint (se a captura for um .json solto)")
     discover.add_argument("-o", "--output", default="field_map.json")
     discover.set_defaults(func=cmd_discover)
+
+    inspect = sub.add_parser(
+        "inspect",
+        help="mostra a estrutura de um evento da captura (só o corpo público das odds)",
+    )
+    inspect.add_argument("captura", help="arquivo .har ou .json")
+    inspect.add_argument("--contendo", help="filtra pelas URLs que contenham este texto")
+    inspect.add_argument("--limite", type=int, default=6000, help="máximo de caracteres")
+    inspect.set_defaults(func=cmd_inspect)
 
     probe = sub.add_parser(
         "probe", help="consulta uma URL e descreve o JSON que voltou (rode da sua máquina)"

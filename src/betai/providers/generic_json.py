@@ -145,6 +145,17 @@ class GenericJsonProvider(Provider):
         if not isinstance(runners, list) or not runners:
             return None
 
+        # Muitas casas achatam todos os mercados num array só, distinguindo-os
+        # por um campo interno (`marketName`, `marketId`). O filtro recorta o
+        # pedaço que pertence a este mercado.
+        filter_field = spec.get("filter_field")
+        if filter_field is not None:
+            alvos = spec.get("filter_values") or [spec.get("filter_value")]
+            alvos = {str(v) for v in alvos if v is not None}
+            runners = [r for r in runners if str(dig(r, filter_field)) in alvos]
+            if not runners:
+                return None
+
         outcome_map: dict[str, str] = spec.get("outcome_map", {})
         selections: list[Selection] = []
         for runner in runners:
