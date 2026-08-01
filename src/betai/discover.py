@@ -521,3 +521,92 @@ def discover(payloads: list[tuple[str, Any]]) -> list[dict[str, Any]]:
     maps = [m for url, payload in payloads if (m := build_field_map(url, payload))]
     maps.sort(key=lambda m: m["_confianca"], reverse=True)
     return maps
+
+
+# Termos que denunciam um painel de estatísticas ao vivo. Comparados contra os
+# nomes dos campos, sem acento e em minúsculas. A lista mistura inglês e
+# português porque as casas usam os dois, às vezes no mesmo payload.
+TERMOS_DE_ESTATISTICA = [
+    "shot",
+    "chute",
+    "finaliza",
+    "ontarget",
+    "nogol",
+    "possession",
+    "posse",
+    "attack",
+    "ataque",
+    "dangerous",
+    "perigoso",
+    "corner",
+    "escanteio",
+    "xg",
+    "expectedgoal",
+    "statistic",
+    "estatistica",
+    "pressure",
+    "pressao",
+]
+
+
+def _normalizar(texto: str) -> str:
+    import unicodedata
+
+    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    return sem_acento.lower().replace("_", "").replace("-", "").replace(" ", "")
+
+
+def _rotulo_de_estatistica(objeto: Any, termos: list[str]) -> str | None:
+    """O objeto se identifica como uma estatística por um dos seus valores?
+
+    É o formato dos provedores de dados ao vivo (Sportradar e semelhantes):
+    o nome da métrica viaja como texto num campo genérico — `{"name": "Shots
+    on target", "value": {"home": 6, "away": 2}}` — e procurar só por nome de
+    campo passa direto por ele.
+    """
+    if not isinstance(objeto, dict):
+        return None
+    for chave, valor in objeto.items():
+        if not isinstance(valor, str) or len(valor) > 60:
+            continue
+        if _normalizar(chave) in ("name", "nome", "label", "titulo", "type", "tipo"):
+            if any(t in _normalizar(valor) for t in termos):
+                return valor
+    return None
+
+
+def buscar_campos(
+    data: Any, termos: list[str], caminho: str = "", profundidade: int = 0
+) -> list[tuple[str, Any]]:
+    """Todos os campos cujo nome contém algum dos termos, com o caminho até eles.
+
+    Devolve pares (caminho, valor). O caminho é pontilhado e usa índices para
+    listas, no mesmo formato que o `field_map` aceita.
+    """
+    if profundidade > 8:
+        return []
+
+    achados: list[tuple[str, Any]] = []
+    if isinstance(data, dict):
+        for chave, valor in data.items():
+            aqui = f"{caminho}.{chave}" if caminho else str(chave)
+            if isinstance(valor, (dict, list)):
+                # O nome da estatística às vezes é um valor, não um campo:
+                # {"name": "Shots on target", "value": {...}}. Nesse formato o
+                # que interessa é o objeto inteiro, não a string solta.
+                rotulo = _rotulo_de_estatistica(valor, termos)
+                if rotulo:
+                    achados.append((f"{aqui} [{rotulo}]", summarize(valor, max_depth=2)))
+                else:
+                    achados.extend(buscar_campos(valor, termos, aqui, profundidade + 1))
+                continue
+            if any(t in _normalizar(str(chave)) for t in termos):
+                achados.append((aqui, valor))
+    elif isinstance(data, list):
+        # Só os primeiros itens: numa lista de 195 jogos, o formato do
+        # primeiro já diz tudo e imprimir os 195 não ajudaria ninguém.
+        for i, item in enumerate(data[:2]):
+            achados.extend(
+                buscar_campos(item, termos, f"{caminho}.{i}" if caminho else str(i), profundidade + 1)
+            )
+    return achados

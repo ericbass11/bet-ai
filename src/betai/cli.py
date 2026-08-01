@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -555,6 +556,62 @@ def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
+    """Procura, numa captura, a resposta que traz as estatísticas ao vivo.
+
+    O `inspect` procura mercados e odds; um painel de estatísticas não tem nem
+    uma coisa nem outra, e por isso passava batido. Aqui a busca é pelo nome
+    dos campos: chutes, posse, ataques perigosos, xG.
+
+    Imprime apenas nomes de campos e valores numéricos das respostas — nunca
+    cabeçalhos nem cookies, que é o que torna um HAR sensível.
+    """
+    from .discover import TERMOS_DE_ESTATISTICA, _normalizar, buscar_campos, extract_from_har
+
+    path = Path(args.captura)
+    if not path.exists():
+        print(f"Arquivo não encontrado: {path}", file=sys.stderr)
+        return 1
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    payloads = (
+        extract_from_har(raw)
+        if isinstance(raw, dict) and "entries" in raw.get("log", {})
+        else [("", raw)]
+    )
+
+    termos = [_normalizar(t) for t in (args.termo or [])] or TERMOS_DE_ESTATISTICA
+    if args.termo:
+        print(f"{DIM}Procurando por: {', '.join(args.termo)}{RESET}\n")
+
+    achados = [(url, campos) for url, p in payloads if (campos := buscar_campos(p, termos))]
+    if not achados:
+        print(
+            "Nenhum campo de estatística nesta captura.\n\n"
+            "O painel talvez carregue de outro domínio. No DevTools, deixe o filtro\n"
+            "em Fetch/XHR, abra o painel de estatísticas com a aba Network já\n"
+            "gravando, e salve de novo. Se ainda assim não vier, o painel pode ser\n"
+            "um iframe de terceiro — nesse caso o dado não está ao nosso alcance.",
+            file=sys.stderr,
+        )
+        return 1
+
+    achados.sort(key=lambda par: len(par[1]), reverse=True)
+    print(f"{BOLD}Respostas com campos de estatística{RESET} (mais promissoras primeiro):")
+    for i, (url, campos) in enumerate(achados[: args.limite]):
+        print(f"\n{BOLD}[{i}]{RESET} {len(campos)} campo(s)  {DIM}{url.split('?')[0]}{RESET}")
+        vistos: set[str] = set()
+        for caminho, valor in campos:
+            # Um caminho por formato: numa lista de 195 jogos os campos se
+            # repetem, e o que interessa é o nome, não os 195 valores.
+            generico = re.sub(r"\.\d+\.", ".N.", caminho)
+            if generico in vistos:
+                continue
+            vistos.add(generico)
+            print(f"    {generico:<50} = {valor!r}")
+    return 0
+
+
 def cmd_probe(args: argparse.Namespace, settings: Settings) -> int:
     """Consulta uma URL e descreve o que voltou. Rode da sua própria máquina."""
     import httpx
@@ -680,6 +737,16 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--mercados", type=int, default=25, help="quantos mercados listar")
     inspect.add_argument("--limite", type=int, default=6000, help="máximo de caracteres")
     inspect.set_defaults(func=cmd_inspect)
+
+    estat = sub.add_parser(
+        "estatisticas", help="acha as estatísticas ao vivo (chutes, posse) numa captura"
+    )
+    estat.add_argument("captura", help="arquivo .har ou .json do DevTools")
+    estat.add_argument(
+        "--termo", action="append", help="procura por este nome de campo (pode repetir)"
+    )
+    estat.add_argument("--limite", type=int, default=8, help="quantas respostas detalhar")
+    estat.set_defaults(func=cmd_estatisticas)
 
     probe = sub.add_parser(
         "probe", help="consulta uma URL e descreve o JSON que voltou (rode da sua máquina)"
