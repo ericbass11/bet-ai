@@ -11,7 +11,7 @@ import abc
 import time
 from typing import Iterable
 
-from ..models import Event
+from ..models import Event, Market
 
 
 class RateLimiter:
@@ -43,6 +43,15 @@ class Provider(abc.ABC):
 
     def fetch_upcoming(self) -> Iterable[Event]:
         """Eventos que ainda vão começar. Opcional."""
+        return []
+
+    @property
+    def supports_details(self) -> bool:
+        """A fonte tem um endpoint por jogo com mercados além do principal?"""
+        return False
+
+    def fetch_details(self, event_id: str) -> list[Market]:
+        """Mercados extras de um jogo. Opcional — custa uma requisição cada."""
         return []
 
     def close(self) -> None:

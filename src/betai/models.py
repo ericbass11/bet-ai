@@ -57,9 +57,19 @@ class Market(BaseModel):
         return None
 
     @property
+    def coverage(self) -> float:
+        """Quanta probabilidade as seleções deste mercado cobrem somadas.
+
+        Quase todo mercado particiona os resultados possíveis e cobre 1.
+        Dupla chance é a exceção: cada resultado do jogo aparece em dois dos
+        três pares, então um livro saudável soma ~2.
+        """
+        return 2.0 if self.key == MarketKey.DOUBLE_CHANCE else 1.0
+
+    @property
     def overround(self) -> float:
         """Soma das probabilidades implícitas. 1.06 significa 6% de margem."""
-        return sum(sel.implied for sel in self.selections)
+        return sum(sel.implied for sel in self.selections) / self.coverage
 
 
 class MatchStats(BaseModel):
@@ -113,6 +123,19 @@ class Event(BaseModel):
 
     def markets_of(self, key: MarketKey) -> list[Market]:
         return [m for m in self.markets if m.key == key]
+
+    def with_markets(self, extras: list[Market]) -> "Event":
+        """Cópia do evento com mercados adicionais.
+
+        Um extra de mesma chave e linha substitui o que veio da listagem: o
+        endpoint por jogo é a fonte mais completa das duas.
+        """
+        if not extras:
+            return self
+        por_chave = {(m.key, m.line): m for m in self.markets}
+        for mkt in extras:
+            por_chave[(mkt.key, mkt.line)] = mkt
+        return self.model_copy(update={"markets": list(por_chave.values())})
 
     @property
     def label(self) -> str:

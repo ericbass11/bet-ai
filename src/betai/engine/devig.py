@@ -104,18 +104,38 @@ _METHODS = {
 }
 
 
-def remove_vig(odds: Sequence[float], method: Method = "power") -> list[float]:
-    """Converte odds decimais em probabilidades justas normalizadas."""
+def remove_vig(
+    odds: Sequence[float], method: Method = "power", coverage: float = 1.0
+) -> list[float]:
+    """Converte odds decimais em probabilidades justas.
+
+    `coverage` é quanta probabilidade as seleções cobrem somadas. Vale 1 na
+    maioria dos mercados, que particionam os resultados possíveis: 1X2,
+    over/under, ambas marcam. Mas dupla chance cobre 2 — cada resultado do
+    jogo aparece em dois dos três pares —, e normalizar para 1 ali produziria
+    probabilidades pela metade e "valor" onde não há.
+
+    A generalização é direta: dividir as implícitas por `coverage` devolve o
+    problema ao caso que soma 1, e o resultado é multiplicado de volta.
+    """
     if not odds:
         return []
     if any(o <= 1.0 for o in odds):
         raise ValueError("odds decimais precisam ser maiores que 1.0")
-    return _METHODS[method](odds)
+    if coverage <= 0:
+        raise ValueError("coverage precisa ser positivo")
+    if coverage == 1.0:
+        return _METHODS[method](odds)
+    scaled = [o * coverage for o in odds]
+    return [p * coverage for p in _METHODS[method](scaled)]
 
 
-def margin(odds: Sequence[float]) -> float:
-    """Margem da casa em fração (0.06 == 6%)."""
-    return sum(1.0 / o for o in odds) - 1.0
+def margin(odds: Sequence[float], coverage: float = 1.0) -> float:
+    """Margem da casa em fração (0.06 == 6%).
+
+    Veja `remove_vig` sobre `coverage`.
+    """
+    return sum(1.0 / o for o in odds) / coverage - 1.0
 
 
 # Faixa plausível de overround. Uma casa opera entre 1% e 20% de margem;
@@ -124,7 +144,7 @@ MIN_OVERROUND = 0.99
 MAX_OVERROUND = 1.35
 
 
-def is_plausible(odds: Sequence[float]) -> bool:
+def is_plausible(odds: Sequence[float], coverage: float = 1.0) -> bool:
     """O conjunto de odds forma um livro coerente?
 
     Esta checagem existe porque `remove_vig` normaliza qualquer entrada para
@@ -135,8 +155,11 @@ def is_plausible(odds: Sequence[float]) -> bool:
 
     Overround abaixo de 1 seria a casa pagando para receber aposta; muito
     acima significa que o que chegou não é um mercado completo.
+
+    `coverage` tem o mesmo sentido de `remove_vig`: numa dupla chance o livro
+    soma ~2 estando perfeitamente saudável.
     """
-    if len(odds) < 2 or any(o <= 1.0 for o in odds):
+    if len(odds) < 2 or any(o <= 1.0 for o in odds) or coverage <= 0:
         return False
-    total = sum(1.0 / o for o in odds)
+    total = sum(1.0 / o for o in odds) / coverage
     return MIN_OVERROUND <= total <= MAX_OVERROUND

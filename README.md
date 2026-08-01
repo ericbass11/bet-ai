@@ -192,6 +192,34 @@ O que a inferência **não** resolve sozinho, e você precisa conferir:
 Se você estiver num IP com acesso ao site, `bet-ai probe <url>` consulta o
 endpoint direto e faz a mesma inferência sem passar pelo HAR.
 
+### Mercados além do principal
+
+Muita casa devolve só o Resultado Final na listagem de jogos ao vivo e guarda
+os outros vinte num endpoint por partida. Para alcançá-los, declare no mapa:
+
+```json
+"url_event": "https://.../v2/pt-BR/events/{id}",
+"event_path": "data",
+"markets_event": [ { "key": "over_under", "...": "..." } ]
+```
+
+O `{id}` é substituído pelo id do jogo. Cada partida custa uma requisição a
+mais, então o ciclo busca detalhe apenas dos jogos que têm — ou ainda podem
+vir a ter — referência de pré-jogo, e no máximo doze por rodada; nos demais,
+mercado extra não viraria aposta de qualquer forma.
+
+Dois recursos do mapa existem por causa desses mercados:
+
+- `group_by` — a casa manda todas as linhas de over/under misturadas no mesmo
+  `marketName`. Agrupar por `showSpecialBetValue` produz um mercado por linha.
+  Sem isso o livro somaria ~4 e seria descartado como incoerente.
+- `outcome_match` — pares `[regex, resultado]` para quando o rótulo carrega a
+  linha dentro dele (`"Mais de 2.5"`) e um `outcome_map` fixo não dá conta.
+
+`examples/superbet.json` usa os dois. Para descobrir os nomes exatos numa casa
+nova, capture a página de um jogo específico e rode
+`bet-ai inspect captura.har --mercado "Total de Gols"`.
+
 ### Geobloqueio
 
 Casas brasileiras reguladas (`.bet.br`) restringem acesso por região — é

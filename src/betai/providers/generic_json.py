@@ -132,6 +132,15 @@ class FieldMap:
         self.params_upcoming: dict[str, str] | None = spec.get("params_upcoming")
         self.url_upcoming: str = spec.get("url_upcoming", self.url)
 
+        # Detalhe por evento. Várias casas devolvem só o mercado principal na
+        # listagem e guardam os outros vinte num endpoint por jogo. `url_event`
+        # é um molde com `{id}`; `markets_event` são os mercados a extrair de
+        # lá. Sem isso, a análise fica restrita ao 1X2.
+        self.url_event: str | None = spec.get("url_event")
+        self.params_event: dict[str, str] = spec.get("params_event", {})
+        self.event_path: str = spec.get("event_path", self.events_path)
+        self.markets_event: list[dict[str, Any]] = spec.get("markets_event", [])
+
 
 class GenericJsonProvider(Provider):
     """Lê odds de um endpoint JSON descrito por um `FieldMap`."""
@@ -180,10 +189,18 @@ class GenericJsonProvider(Provider):
         if not self._robots_ok:
             raise ProviderError(f"robots.txt proíbe a coleta de {self.map.url}")
 
-    def _parse_market(self, raw_event: Any, spec: dict[str, Any]) -> Market | None:
+    def _parse_markets(self, raw_event: Any, spec: dict[str, Any]) -> list[Market]:
+        """Extrai de um evento cru todos os mercados que casam com um spec.
+
+        Normalmente é um só. Mas `group_by` produz um mercado por valor
+        distinto do campo — é o que separa "Total de Gols" em over/under 1.5,
+        2.5, 3.5, que a casa entrega misturados num array único. Sem essa
+        separação o livro não fecha (soma ~4 em vez de 1) e o mercado inteiro
+        seria descartado como incoerente.
+        """
         runners = dig(raw_event, spec["path"], [])
         if not isinstance(runners, list) or not runners:
-            return None
+            return []
 
         # Muitas casas achatam todos os mercados num array só, distinguindo-os
         # por um campo interno (`marketName`, `marketId`). O filtro recorta o
@@ -194,39 +211,58 @@ class GenericJsonProvider(Provider):
             alvos = {str(v) for v in alvos if v is not None}
             runners = [r for r in runners if str(dig(r, filter_field)) in alvos]
             if not runners:
-                return None
+                return []
 
+        group_by = spec.get("group_by")
+        if group_by is None:
+            market = self._build_market(runners, spec, spec.get("line"))
+            return [market] if market else []
+
+        grupos: dict[str, list[Any]] = {}
+        for runner in runners:
+            valor = dig(runner, group_by)
+            if valor is None:
+                continue
+            grupos.setdefault(str(valor), []).append(runner)
+
+        markets = []
+        for valor, do_grupo in grupos.items():
+            market = self._build_market(do_grupo, spec, valor)
+            if market:
+                markets.append(market)
+        return markets
+
+    def _build_market(
+        self, runners: list[Any], spec: dict[str, Any], line: Any
+    ) -> Market | None:
         outcome_map: dict[str, str] = spec.get("outcome_map", {})
+        # Rótulo por padrão de texto, para quando o nome carrega a linha
+        # dentro dele ("Mais de 2.5", "Menos de 3.5") e um mapa fixo não dá
+        # conta. Primeiro padrão que casar vence.
+        patterns = [(re.compile(p, re.I), o) for p, o in spec.get("outcome_match", [])]
+
+        line_value = _as_float(line)
         selections: list[Selection] = []
         for runner in runners:
             raw_outcome = str(dig(runner, spec.get("outcome_field", "name"), ""))
-            odds = dig(runner, spec.get("odds_field", "price"))
-            if odds is None:
+            odds = _as_float(dig(runner, spec.get("odds_field", "price")))
+            if odds is None or odds <= 1.0:
                 continue
-            try:
-                odds = float(odds)
-            except (TypeError, ValueError):
-                continue
-            if odds <= 1.0:
-                continue
-            line_field = spec.get("line_field")
-            line = dig(runner, line_field) if line_field else spec.get("line")
-            selections.append(
-                Selection(
-                    outcome=outcome_map.get(raw_outcome, raw_outcome.lower()),
-                    odds=odds,
-                    line=float(line) if line is not None else None,
+
+            outcome = outcome_map.get(raw_outcome)
+            if outcome is None:
+                outcome = next(
+                    (o for padrao, o in patterns if padrao.search(raw_outcome)),
+                    raw_outcome.lower(),
                 )
-            )
+
+            line_field = spec.get("line_field")
+            sel_line = _as_float(dig(runner, line_field)) if line_field else line_value
+            selections.append(Selection(outcome=outcome, odds=odds, line=sel_line))
 
         if not selections:
             return None
-        line = spec.get("line")
-        return Market(
-            key=MarketKey(spec["key"]),
-            selections=selections,
-            line=float(line) if line is not None else None,
-        )
+        return Market(key=MarketKey(spec["key"]), selections=selections, line=line_value)
 
     def _field(self, raw: Any, spec: Any, default: Any = None) -> Any:
         """Lê um campo do evento.
@@ -283,7 +319,7 @@ class GenericJsonProvider(Provider):
             red_cards_away=_as_int(self._field(raw, f.get("red_cards_away"))),
         )
 
-        markets = [m for spec in self.map.markets if (m := self._parse_market(raw, spec))]
+        markets = [m for spec in self.map.markets for m in self._parse_markets(raw, spec)]
         if not markets:
             return None
 
@@ -353,6 +389,49 @@ class GenericJsonProvider(Provider):
         # O endpoint pode devolver jogos em andamento junto; só interessam os
         # que ainda não começaram.
         return [e for e in eventos if not e.state.is_live]
+
+    @property
+    def supports_details(self) -> bool:
+        return bool(self.map.url_event and self.map.markets_event)
+
+    def fetch_details(self, event_id: str) -> list[Market]:
+        """Mercados extras de um jogo, do endpoint por evento.
+
+        A listagem de várias casas traz só o mercado principal. Os outros
+        exigem uma requisição por jogo — cara, por isso quem chama decide
+        para quais jogos vale a pena (veja `collect_live_analyses`).
+        """
+        if not self.supports_details:
+            return []
+
+        self._check_robots()
+        self.limiter.wait()
+        url = self.map.url_event.format(id=event_id)
+        try:
+            payload = self._get_json(url, self.map.params_event)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ProviderError(f"falha ao ler detalhes de {event_id}: {exc}") from exc
+
+        raw = dig(payload, self.map.event_path, payload) if self.map.event_path else payload
+        if isinstance(raw, list):
+            raw = raw[0] if raw else None
+        if raw is None:
+            return []
+
+        return [m for spec in self.map.markets_event for m in self._parse_markets(raw, spec)]
+
+
+def _as_float(value: Any) -> float | None:
+    """Converte para float tolerando texto e ausência.
+
+    Linhas e odds chegam como string em boa parte das casas ("2.5", "1.85").
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_int(value: Any) -> int:

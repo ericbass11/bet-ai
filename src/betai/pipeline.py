@@ -38,7 +38,9 @@ def usable_markets(event: Event) -> list[Market]:
     somar 1, então esse mercado vira probabilidades inventadas e "vantagens"
     de centenas por cento. Descartar é a única leitura honesta.
     """
-    return [m for m in event.markets if is_plausible([s.odds for s in m.selections])]
+    return [
+        m for m in event.markets if is_plausible([s.odds for s in m.selections], m.coverage)
+    ]
 
 
 def market_probabilities(event: Event, method: Method = "power") -> dict[str, float]:
@@ -49,7 +51,7 @@ def market_probabilities(event: Event, method: Method = "power") -> dict[str, fl
     out: dict[str, float] = {}
     for mkt in usable_markets(event):
         odds = [s.odds for s in mkt.selections]
-        fair = remove_vig(odds, method)
+        fair = remove_vig(odds, method, mkt.coverage)
         suffix = f"@{mkt.line}" if mkt.line is not None else ""
         for sel, p in zip(mkt.selections, fair):
             out[f"{mkt.key.value}{suffix}.{sel.outcome}"] = p
@@ -193,6 +195,17 @@ class Pipeline:
         if event.event_id in self._baselines or not self._usable_as_baseline(event):
             return
         self._baselines[event.event_id] = self._derive(event)
+
+    def wants_details(self, event: Event) -> bool:
+        """Vale gastar uma requisição extra buscando mais mercados deste jogo?
+
+        Vale em dois casos, e só neles: o jogo ainda serve de referência — e
+        aí um over/under a mais melhora a calibração do baseline —, ou já tem
+        referência guardada, e aí os mercados extras viram apostas. Sem
+        baseline, mercado extra só engorda a tela: o modelo concorda com as
+        odds por construção e não tem o que comparar.
+        """
+        return event.event_id in self._baselines or self._usable_as_baseline(event)
 
     def _baseline_for(self, event: Event) -> tuple[tuple[float, float], str]:
         """Encontra o melhor baseline disponível e diz de onde ele veio."""

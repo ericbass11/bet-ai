@@ -169,10 +169,18 @@ def test_pagina_nao_busca_nada_externo():
 
 def test_pagina_traduz_o_vocabulario_interno():
     """A tela é para quem aposta, não para quem programa: 'btts — yes' não
-    diz nada, 'Ambas marcam' diz."""
+    diz nada, 'Ambas as equipes marcam' diz."""
     from betai.web import PAGINA
 
-    for termo in ("vence", "Empate", "Ambas marcam", "Mais de", "Menos de", "handicap"):
+    for termo in (
+        "vence",
+        "Empate",
+        "Ambas as equipes marcam",
+        "ou empate",
+        "Mais de",
+        "Menos de",
+        "handicap",
+    ):
         assert termo in PAGINA, f"falta a tradução de {termo}"
 
 

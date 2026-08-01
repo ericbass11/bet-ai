@@ -68,8 +68,10 @@ def _serializar(a: Analysis) -> dict[str, Any]:
     from .pipeline import usable_markets
 
     e = a.event
-    descartados = len(e.markets) - len(usable_markets(e))
+    analisados = usable_markets(e)
+    descartados = len(e.markets) - len(analisados)
     return {
+        "mercados_analisados": len(analisados),
         "mercados_descartados": descartados,
         "id": e.event_id,
         "casa": e.home_team,
@@ -294,7 +296,7 @@ function rotulo(a, j) {
     case 'over_under':
       return a.selecao === 'over' ? `Mais de ${n} gols` : `Menos de ${n} gols`;
     case 'btts':
-      return a.selecao === 'yes' ? 'Ambas marcam' : 'Nem todas marcam';
+      return a.selecao === 'yes' ? 'Ambas as equipes marcam' : 'Pelo menos um time não marca';
     case 'asian_handicap':
       return `${a.selecao === 'home' ? j.casa : j.fora} com handicap ${n}`;
     case 'correct_score':
@@ -374,7 +376,8 @@ function desenhar(dados) {
     if (j.resumo_ia) html += `<div class="ia"><strong>IA:</strong> ${j.resumo_ia}</div>`;
     html += j.apostas.length
       ? tabela(j.apostas, j)
-      : '<p class="vazio">Sem diferença relevante contra o mercado.</p>';
+      : `<p class="vazio">Sem diferença relevante contra o mercado
+         ${j.mercados_analisados ? `(${j.mercados_analisados} mercado(s) comparado(s))` : ''}.</p>`;
     html += '</div>';
   }
   document.getElementById('conteudo').innerHTML = html;

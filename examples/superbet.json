@@ -22,10 +22,18 @@
     "em `params_upcoming` e o baseline passa a vir de lá, ainda melhor.",
     "",
     "  - o minuto vem vazio em parte dos jogos; `metadata.periodStatus` (1H/2H/HT) é o sinal confiável de que a bola está rolando;",
-    "IMPORTANTE: o endpoint de listagem devolve apenas o mercado principal",
-    "(Resultado Final), mesmo com `marketCount: 22`. Os demais mercados vêm",
-    "do endpoint por evento. Para mapeá-los, capture a página de um jogo",
-    "específico e rode `bet-ai inspect` nessa captura."
+    "",
+    "OUTROS MERCADOS: o endpoint de listagem devolve só o Resultado Final,",
+    "mesmo anunciando `marketCount: 22`. Os demais vêm de `/v2/pt-BR/events/{id}`,",
+    "declarado em `url_event` + `markets_event`. Custa uma requisição por jogo,",
+    "então o ciclo só busca detalhe dos jogos que têm (ou ainda podem virar)",
+    "referência pré-jogo — nos outros, mercado extra não vira aposta.",
+    "",
+    "Os quatro mercados mapeados abaixo são os que o motor sabe modelar. Ficaram",
+    "de fora, por ora, Handicap Asiático e Handicap: a casa manda `code: null`",
+    "neles e a linha não apareceu na captura que eu tinha. Se quiser incluí-los,",
+    "rode `bet-ai inspect ... --mercado 'Handicap Asiático'` e veja em que campo",
+    "a linha viaja."
   ],
   "url": "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date",
   "params": {
@@ -81,6 +89,65 @@
         "1": "home",
         "0": "draw",
         "2": "away"
+      }
+    }
+  ],
+
+  "url_event": "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/{id}",
+  "event_path": "data",
+  "markets_event": [
+    {
+      "key": "1x2",
+      "path": "odds",
+      "filter_field": "marketName",
+      "filter_value": "Resultado Final",
+      "outcome_field": "code",
+      "odds_field": "price",
+      "outcome_map": {
+        "1": "home",
+        "0": "draw",
+        "2": "away"
+      }
+    },
+    {
+      "_nota": "A casa entrega todas as linhas misturadas no mesmo marketName; group_by separa uma por linha, senão o livro somaria ~4 e o mercado inteiro seria descartado como incoerente.",
+      "key": "over_under",
+      "path": "odds",
+      "filter_field": "marketName",
+      "filter_value": "Total de Gols",
+      "group_by": "showSpecialBetValue",
+      "outcome_field": "name",
+      "odds_field": "price",
+      "outcome_match": [
+        ["^mais de", "over"],
+        ["^menos de", "under"]
+      ]
+    },
+    {
+      "key": "btts",
+      "path": "odds",
+      "filter_field": "marketName",
+      "filter_value": "Ambas as Equipes Marcam",
+      "outcome_field": "name",
+      "odds_field": "price",
+      "outcome_map": {
+        "Sim": "yes",
+        "Não": "no",
+        "Nao": "no"
+      }
+    },
+    {
+      "_nota": "Códigos são pares dos códigos do 1X2 (1=casa, 0=empate, 2=fora).",
+      "key": "double_chance",
+      "path": "odds",
+      "filter_field": "marketName",
+      "filter_value": "Dupla Chance",
+      "outcome_field": "code",
+      "odds_field": "price",
+      "outcome_map": {
+        "10": "home_draw",
+        "12": "home_away",
+        "02": "draw_away"
       }
     }
   ]

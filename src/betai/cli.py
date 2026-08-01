@@ -135,6 +135,27 @@ def build_analyst(args: argparse.Namespace, settings: Settings):
     )
 
 
+# Quantos jogos por ciclo recebem a busca de mercados extras. Cada um custa
+# uma requisição a mais, com o intervalo mínimo do rate limit entre elas — com
+# 190 jogos ao vivo, buscar todos levaria mais tempo que o ciclo inteiro. O
+# corte é por ordem de chegada e os jogos de fora simplesmente ficam com o
+# mercado principal neste ciclo.
+MAX_DETALHES_POR_CICLO = 12
+
+
+def _com_mercados_extras(provider: Provider, event: Event) -> Event:
+    """Junta ao evento os mercados do endpoint por jogo, se houver.
+
+    Uma falha aqui não pode derrubar o ciclo: o jogo segue analisável com o
+    mercado principal, que é o que a listagem já trouxe.
+    """
+    try:
+        return event.with_markets(provider.fetch_details(event.event_id))
+    except ProviderError as exc:
+        print(f"{DIM}Sem mercados extras para {event.label}: {exc}{RESET}", file=sys.stderr)
+        return event
+
+
 def collect_live_analyses(
     provider: Provider,
     store: Store | None,
@@ -157,7 +178,11 @@ def collect_live_analyses(
             store.save_snapshot(event)
 
     analises: list[Analysis] = []
+    restam_detalhes = MAX_DETALHES_POR_CICLO if provider.supports_details else 0
     for event in provider.fetch_live():
+        if restam_detalhes and pipeline.wants_details(event):
+            event = _com_mercados_extras(provider, event)
+            restam_detalhes -= 1
         if store:
             store.save_snapshot(event)
         analysis = (
