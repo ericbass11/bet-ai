@@ -50,21 +50,41 @@ odds da casa
 
 ## Instalação
 
-Requer Python 3.10+.
+Requer **Python 3.10+**. Confira antes de qualquer coisa:
+
+```bash
+python3 --version
+```
+
+> **macOS:** o Python do sistema é o 3.9 e não serve — ele saiu de suporte em
+> outubro de 2025. Não tente atualizá-lo; instale um Python moderno ao lado
+> (o `uv` abaixo faz isso sozinho).
 
 ```bash
 git clone https://github.com/ericbass11/bet-ai.git
 cd bet-ai
 git checkout claude/football-analysis-ai-5kc8mn
 
-uv venv && uv pip install -e ".[dev]"
+uv venv --python 3.12              # baixa o Python 3.12 se não houver
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
+uv pip install -e ".[dev]"
 ```
 
-Sem `uv`, o equivalente com as ferramentas padrão:
+Se o `uv` não estiver instalado:
 
 ```bash
-python3 -m venv .venv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+exec $SHELL                        # recarrega o PATH na sessão atual
+```
+
+O `uv` guarda o Python dele em `~/.local/share/uv/` e não toca no Python do
+sistema.
+
+Sem `uv`, com as ferramentas padrão — trocando `python3.12` pelo interpretador
+3.10+ que você tiver (`brew install python@3.12` no macOS):
+
+```bash
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip          # necessário: instalação editável exige pip ≥ 21.3
 pip install -e ".[dev]"
