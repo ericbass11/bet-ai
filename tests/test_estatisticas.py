@@ -124,7 +124,9 @@ def _rodar(tmp_path, har, **kwargs) -> tuple[int, str]:
 
     caminho = tmp_path / "captura.har"
     caminho.write_text(json.dumps(har), encoding="utf-8")
-    args = argparse.Namespace(captura=str(caminho), termo=None, limite=8, **kwargs)
+    args = argparse.Namespace(
+        captura=str(caminho), termo=None, limite=8, **{"listar": False, **kwargs}
+    )
     import contextlib
     import io
 
@@ -170,7 +172,9 @@ def test_comando_avisa_quando_o_arquivo_nao_existe(tmp_path):
     from betai.cli import cmd_estatisticas
     from betai.config import Settings
 
-    args = argparse.Namespace(captura=str(tmp_path / "nao-existe.har"), termo=None, limite=8)
+    args = argparse.Namespace(
+        captura=str(tmp_path / "nao-existe.har"), termo=None, limite=8, listar=False
+    )
     import contextlib
     import io
 
@@ -389,3 +393,48 @@ def test_har_sem_websocket_nao_menciona_websocket(tmp_path):
     codigo, saida = _rodar(tmp_path, _har(("https://casa/api/odds", SUPERBET)))
     assert codigo == 0
     assert "WebSocket" not in saida
+
+
+# ---------- inventário da captura ----------
+
+
+def test_listar_agrupa_por_dominio(tmp_path):
+    har = _har(
+        ("https://casa.example/v2/events/by-date", SUPERBET),
+        ("https://casa.example/v2/events/13332095", SUPERBET),
+        ("https://widgets.terceiro.example/config", {"ok": 1}),
+    )
+    codigo, saida = _rodar(tmp_path, har, listar=True)
+
+    assert codigo == 0
+    assert "casa.example" in saida and "widgets.terceiro.example" in saida
+    assert "/v2/events/by-date" in saida
+    # Domínio com mais endereços vem primeiro.
+    assert saida.index("casa.example") < saida.index("widgets.terceiro.example")
+
+
+def test_listar_nao_imprime_a_query_string(tmp_path):
+    """É na query que viajam tokens de sessão."""
+    har = _har(("https://casa.example/api?token=SEGREDO&startDate=x", SUPERBET))
+    _, saida = _rodar(tmp_path, har, listar=True)
+    assert "SEGREDO" not in saida
+    assert "/api" in saida
+
+
+def test_listar_conta_websocket(tmp_path):
+    har = _har(("https://casa.example/api", SUPERBET))
+    har["log"]["entries"].append(
+        {
+            "request": {"url": "wss://lmt.example/stream"},
+            "response": {"content": {}},
+            "_webSocketMessages": [{"type": "receive", "data": json.dumps(SPORTRADAR)}],
+        }
+    )
+    _, saida = _rodar(tmp_path, har, listar=True)
+    assert "1 conexão(ões) WebSocket" in saida
+
+
+def test_listar_explica_a_ausencia_de_websocket(tmp_path):
+    _, saida = _rodar(tmp_path, _har(("https://casa.example/api", SUPERBET)), listar=True)
+    assert "0 conexão(ões) WebSocket" in saida
+    assert "F5" in saida

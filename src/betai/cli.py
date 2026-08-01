@@ -556,6 +556,46 @@ def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def _listar_captura(raw: Any, payloads: list[tuple[str, Any]]) -> int:
+    """Mostra tudo que a captura contém, agrupado por domínio.
+
+    Serve para responder uma pergunta anterior à busca: o tráfego que eu queria
+    chegou a ser gravado? Se o domínio do painel não aparece aqui, procurar
+    campo dentro das respostas nunca ia encontrar nada.
+
+    Imprime endereço sem a query string — é lá que viajam tokens de sessão.
+    """
+    from urllib.parse import urlparse
+
+    entradas = raw.get("log", {}).get("entries", []) if isinstance(raw, dict) else []
+    com_ws = sum(1 for e in entradas if e.get("_webSocketMessages"))
+
+    print(f"{BOLD}A captura tem{RESET}: {len(entradas)} requisição(ões) no total, "
+          f"{len(payloads)} resposta(s) em JSON, {com_ws} conexão(ões) WebSocket.\n")
+
+    por_dominio: dict[str, set[str]] = {}
+    for url, _ in payloads:
+        partes = urlparse(url.split(" [")[0])
+        por_dominio.setdefault(partes.netloc or "(sem domínio)", set()).add(partes.path)
+
+    for dominio in sorted(por_dominio, key=lambda d: -len(por_dominio[d])):
+        caminhos = sorted(por_dominio[dominio])
+        print(f"{BOLD}{dominio}{RESET}  {DIM}({len(caminhos)} endereço(s)){RESET}")
+        for caminho in caminhos[:15]:
+            print(f"    {caminho}")
+        if len(caminhos) > 15:
+            print(f"    {DIM}... e mais {len(caminhos) - 15}{RESET}")
+        print()
+
+    if not com_ws:
+        print(
+            f"{DIM}Nenhum WebSocket foi gravado. Se o painel usa um, a conexão já\n"
+            f"estava aberta antes da gravação começar — recarregue a página (F5)\n"
+            f"com a aba Network já aberta e capture de novo.{RESET}"
+        )
+    return 0
+
+
 def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
     """Procura, numa captura, a resposta que traz as estatísticas ao vivo.
 
@@ -590,6 +630,9 @@ def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
         payloads = payloads + quadros
     else:
         payloads = [("", raw)]
+
+    if args.listar:
+        return _listar_captura(raw, payloads)
 
     termos = [_normalizar(t) for t in (args.termo or [])] or TERMOS_DE_ESTATISTICA
     if args.termo:
@@ -757,6 +800,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--termo", action="append", help="procura por este nome de campo (pode repetir)"
     )
     estat.add_argument("--limite", type=int, default=8, help="quantas respostas detalhar")
+    estat.add_argument(
+        "--listar",
+        action="store_true",
+        help="lista tudo que a captura contém, por domínio, sem procurar nada",
+    )
     estat.set_defaults(func=cmd_estatisticas)
 
     probe = sub.add_parser(
