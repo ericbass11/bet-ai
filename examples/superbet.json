@@ -9,7 +9,10 @@
     "  - placar e minuto ficam em `metadata` e vêm como texto ('59', '2');",
     "  - todos os mercados vêm achatados num array `odds` único, separados",
     "    pelo campo `marketName` — daí o `filter_field` em cada mercado;",
-    "  - a liga só aparece como `tournamentId` numérico neste endpoint.",
+    "  - a liga só aparece como `tournamentId` numérico neste endpoint;",
+    "  - `startDate` é obrigatório: sem ele a API devolve 400. O valor",
+    "    `{now-7d}` reproduz o que o próprio site envia (uma semana atrás),",
+    "    e é calculado a cada requisição.",
     "",
     "IMPORTANTE: o endpoint de listagem devolve apenas o mercado principal",
     "(Resultado Final), mesmo com `marketCount: 22`. Os demais mercados vêm",
@@ -20,7 +23,8 @@
   "url": "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date",
   "params": {
     "currentStatus": "active",
-    "offerState": "live"
+    "offerState": "live",
+    "startDate": "{now-7d}"
   },
   "headers": {
     "Accept": "application/json"

@@ -15,8 +15,9 @@ Antes de apontar isto para um site:
 
 from __future__ import annotations
 
+import re
 import urllib.robotparser
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -30,6 +31,41 @@ from ..models import (
     Selection,
 )
 from .base import Provider, ProviderError, RateLimiter
+
+
+_PLACEHOLDER = re.compile(
+    r"\{(now|today)"           # base temporal
+    r"(?:([+-])(\d+)([smhd]))?"  # deslocamento opcional: -7d, +2h
+    r"(?::([^}]+))?\}"          # formato opcional: :%Y-%m-%d
+)
+
+_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
+
+
+def render_params(params: dict[str, str], now: datetime | None = None) -> dict[str, str]:
+    """Resolve marcadores de data nos parâmetros da requisição.
+
+    Vários endpoints de casas exigem uma data na query e recusam a requisição
+    sem ela. Como a data muda a cada chamada, o mapa declara o marcador e o
+    valor é calculado na hora:
+
+        {"startDate": "{now-7d}"}       → "2026-07-25 18:34:00"
+        {"date": "{today}"}             → "2026-08-01"
+        {"from": "{now:%Y-%m-%dT%H:%M}"} → "2026-08-01T18:34"
+    """
+    agora = now or datetime.now()
+
+    def resolve(match: re.Match[str]) -> str:
+        base, sinal, quantidade, unidade, formato = match.groups()
+        momento = agora
+        if quantidade:
+            delta = timedelta(**{_UNITS[unidade]: int(quantidade)})
+            momento = momento - delta if sinal == "-" else momento + delta
+        if formato:
+            return momento.strftime(formato)
+        return momento.strftime("%Y-%m-%d" if base == "today" else "%Y-%m-%d %H:%M:%S")
+
+    return {chave: _PLACEHOLDER.sub(resolve, str(valor)) for chave, valor in params.items()}
 
 
 def dig(data: Any, path: str, default: Any = None) -> Any:
@@ -248,14 +284,22 @@ class GenericJsonProvider(Provider):
         suporte, e a descompressão falha com "incorrect header check". Nesse
         caso repetimos pedindo a resposta sem compressão.
         """
+        params = render_params(self.map.params)
         try:
-            resp = self.client.get(self.map.url, params=self.map.params)
+            resp = self.client.get(self.map.url, params=params)
         except httpx.DecodingError:
             self.limiter.wait()
             resp = self.client.get(
-                self.map.url, params=self.map.params, headers={"Accept-Encoding": "identity"}
+                self.map.url, params=params, headers={"Accept-Encoding": "identity"}
             )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # O corpo de um 4xx quase sempre diz o que falta na requisição.
+            # Sem ele, o usuário fica adivinhando qual parâmetro está errado.
+            detalhe = resp.text[:300].strip().replace("\n", " ")
+            raise ProviderError(
+                f"{self.map.url} respondeu {resp.status_code}"
+                f"{f' — {detalhe}' if detalhe else ''}"
+            )
         return resp.json()
 
     def fetch_live(self) -> Iterable[Event]:

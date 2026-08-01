@@ -231,3 +231,75 @@ def test_erro_de_rede_continua_sendo_erro():
     with _pytest.raises(Exception) as exc:
         list(provider.fetch_live())
     assert "falha ao ler" in str(exc.value)
+
+
+# ---------- parâmetros com data ----------
+
+
+def test_marcador_de_data_vira_data_de_verdade():
+    from datetime import datetime
+
+    from betai.providers.generic_json import render_params
+
+    agora = datetime(2026, 8, 1, 18, 34, 0)
+    out = render_params(
+        {
+            "startDate": "{now-7d}",
+            "hoje": "{today}",
+            "curto": "{now:%Y-%m-%d}",
+            "daqui": "{now+2h}",
+            "fixo": "live",
+        },
+        now=agora,
+    )
+    assert out["startDate"] == "2026-07-25 18:34:00"   # igual ao que o site envia
+    assert out["hoje"] == "2026-08-01"
+    assert out["curto"] == "2026-08-01"
+    assert out["daqui"] == "2026-08-01 20:34:00"
+    assert out["fixo"] == "live"
+
+
+def test_params_sem_marcador_passam_intactos():
+    from betai.providers.generic_json import render_params
+
+    original = {"offerState": "live", "n": "10"}
+    assert render_params(original) == original
+
+
+def test_mapa_superbet_exige_startdate():
+    """Sem startDate a API devolve 400 — o mapa não pode esquecê-lo."""
+    spec = json.loads(
+        (Path(__file__).resolve().parents[1] / "examples" / "superbet.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "startDate" in spec["params"]
+
+    from betai.providers.generic_json import render_params
+
+    resolvido = render_params(spec["params"])
+    # Tem que virar uma data concreta, não sobrar o marcador literal.
+    assert "{" not in resolvido["startDate"]
+    assert len(resolvido["startDate"]) == len("2026-07-25 18:34:00")
+
+
+def test_erro_4xx_mostra_o_corpo_da_resposta():
+    """Um 400 sem o corpo manda o usuário adivinhar qual parâmetro falta."""
+    import httpx
+
+    spec = json.loads(FIELD_MAP.read_text(encoding="utf-8"))
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False, min_interval=0.0)
+
+    class ClienteQueRecusa:
+        def get(self, url, params=None, headers=None):
+            return httpx.Response(
+                400,
+                text='{"error":"startDate is required"}',
+                request=httpx.Request("GET", url),
+            )
+
+    provider.client = ClienteQueRecusa()
+    with pytest.raises(Exception) as exc:
+        provider._get_json()
+    assert "400" in str(exc.value)
+    assert "startDate is required" in str(exc.value)
