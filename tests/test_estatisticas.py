@@ -506,3 +506,63 @@ def test_json_solto_com_estatistica_conhecida_usa_a_busca(tmp_path):
 
     assert codigo == 0
     assert "Shots on target" in saida.getvalue()
+
+
+# ---------- arquivo que não é JSON ----------
+
+
+def _rodar_arquivo(path) -> tuple[int, str]:
+    import argparse
+    import contextlib
+    import io
+
+    from betai.cli import cmd_estatisticas
+    from betai.config import Settings
+
+    args = argparse.Namespace(
+        captura=str(path), termo=None, limite=8, listar=False, contendo=None
+    )
+    saida = io.StringIO()
+    with contextlib.redirect_stdout(saida), contextlib.redirect_stderr(saida):
+        codigo = cmd_estatisticas(args, Settings())
+    return codigo, saida.getvalue()
+
+
+def test_resposta_binaria_explica_como_pedir_json(tmp_path):
+    """Protobuf salvo como arquivo. Um traceback aqui não ajuda ninguém."""
+    caminho = tmp_path / "stats.json"
+    caminho.write_bytes(b"\n\x13\x33NhuBLRCAgMeAzZexN\x1a\x08Brasil\x00\x01\x02")
+
+    codigo, saida = _rodar_arquivo(caminho)
+    assert codigo == 1
+    assert "protobuf" in saida
+    assert "accept: application/json" in saida
+
+
+def test_texto_com_formatacao_explica_a_causa(tmp_path):
+    """O que o app de notas devolve: o conteúdo virou lista de checkbox."""
+    caminho = tmp_path / "stats.json"
+    caminho.write_text("- [ ] alguma coisa\n- [ ] outra\n", encoding="utf-8")
+
+    codigo, saida = _rodar_arquivo(caminho)
+    assert codigo == 1
+    assert "não é JSON válido" in saida
+    assert "pbpaste" in saida
+
+
+def test_arquivo_vazio_diz_que_esta_vazio(tmp_path):
+    caminho = tmp_path / "stats.json"
+    caminho.write_text("", encoding="utf-8")
+
+    codigo, saida = _rodar_arquivo(caminho)
+    assert codigo == 1
+    assert "vazio" in saida
+
+
+def test_json_valido_continua_passando(tmp_path):
+    caminho = tmp_path / "stats.json"
+    caminho.write_text(json.dumps(SPORTRADAR), encoding="utf-8")
+
+    codigo, saida = _rodar_arquivo(caminho)
+    assert codigo == 0
+    assert "Shots on target" in saida

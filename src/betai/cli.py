@@ -635,6 +635,47 @@ def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def _ler_json(path: Path) -> Any | None:
+    """Lê o arquivo como JSON, explicando o problema em vez de estourar.
+
+    Quem usa isto está colando resposta de API num arquivo, e as duas formas
+    de errar são conhecidas: salvar uma resposta binária (protobuf), ou passar
+    o texto por um editor que adiciona formatação. Um traceback de Python não
+    ajuda ninguém a descobrir qual das duas foi.
+    """
+    bruto = path.read_bytes()
+    if not bruto.strip():
+        print(f"{path} está vazio.", file=sys.stderr)
+        return None
+
+    try:
+        return json.loads(bruto.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        pass
+
+    # Byte de controle fora de tab/quebra-de-linha denuncia binário.
+    binario = any(b < 9 or 13 < b < 32 for b in bruto[:2000])
+    if binario:
+        print(
+            f"{path} não é texto — parece uma resposta binária (protobuf).\n\n"
+            f"Peça JSON ao servidor trocando o cabeçalho:\n"
+            f"    -H 'accept: application/json'\n"
+            f"e salve direto com `-o {path.name}`, sem passar por editor de texto:\n"
+            f"binário não sobrevive a copiar e colar.",
+            file=sys.stderr,
+        )
+    else:
+        inicio = bruto[:80].decode("utf-8", "replace").strip().replace("\n", " ")
+        print(
+            f"{path} não é JSON válido. Começa com: {inicio!r}\n\n"
+            f"Se você colou por um app de notas ou pelo TextEdit, a formatação\n"
+            f"vai junto e estraga o arquivo. Salve direto do curl com `-o`, ou\n"
+            f"use `pbpaste > arquivo.json` logo depois de copiar.",
+            file=sys.stderr,
+        )
+    return None
+
+
 def _listar_captura(raw: Any, payloads: list[tuple[str, Any]]) -> int:
     """Mostra tudo que a captura contém, agrupado por domínio.
 
@@ -698,7 +739,9 @@ def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
         print(f"Arquivo não encontrado: {path}", file=sys.stderr)
         return 1
 
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = _ler_json(path)
+    if raw is None:
+        return 1
     if isinstance(raw, dict) and "entries" in raw.get("log", {}):
         payloads = extract_from_har(raw)
         # Painel ao vivo costuma transmitir por WebSocket em vez de fazer
