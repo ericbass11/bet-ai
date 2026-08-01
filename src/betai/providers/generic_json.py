@@ -268,11 +268,17 @@ class GenericJsonProvider(Provider):
             return None
 
         minute = _as_int(self._field(raw, f.get("minute", "minute")))
+        score_home = _as_int(self._field(raw, f.get("score_home", "score_home")))
+        score_away = _as_int(self._field(raw, f.get("score_away", "score_away")))
         state = MatchState(
             minute=minute,
-            period=_period_for(minute),
-            score_home=_as_int(self._field(raw, f.get("score_home", "score_home"))),
-            score_away=_as_int(self._field(raw, f.get("score_away", "score_away"))),
+            period=_period_for(
+                minute,
+                status=self._field(raw, f.get("status")),
+                placar=score_home + score_away,
+            ),
+            score_home=score_home,
+            score_away=score_away,
             red_cards_home=_as_int(self._field(raw, f.get("red_cards_home"))),
             red_cards_away=_as_int(self._field(raw, f.get("red_cards_away"))),
         )
@@ -363,9 +369,46 @@ def _as_int(value: Any) -> int:
         return 0
 
 
-def _period_for(minute: int) -> str:
+# Rótulos de status que significam "a bola está rolando", em variantes que
+# as casas usam. Comparados em maiúsculas, sem espaços.
+# O status declarado pela casa, quando informa a fase, é mais confiável que o
+# minuto — que várias casas deixam vazio. Comparado em maiúsculas, sem
+# espaços nem sublinhados.
+STATUS_PRIMEIRO_TEMPO = {"1H", "FIRSTHALF", "PRIMEIROTEMPO", "1T"}
+STATUS_SEGUNDO_TEMPO = {"2H", "SECONDHALF", "SEGUNDOTEMPO", "2T"}
+STATUS_INTERVALO = {"HT", "HALFTIME", "INTERVALO", "PAUSED"}
+STATUS_ENCERRADO = {"ENDED", "FINISHED", "CLOSED", "FT", "ENCERRADO", "FINALIZADO"}
+# Ao vivo mas sem dizer a fase: cai para o minuto.
+STATUS_AO_VIVO = {"STARTED", "LIVE", "INPLAY", "EMANDAMENTO"}
+
+
+def _period_for(minute: int, status: object = None, placar: int = 0) -> str:
+    """Em que fase o jogo está.
+
+    Não dá para depender só do minuto: várias casas deixam o campo vazio em
+    parte dos jogos, e um jogo tratado como pré-jogo enquanto as odds já
+    refletem o placar produz divergência inteiramente artificial — o modelo
+    calcula sem os gols que as odds já embutem.
+
+    Por isso três sinais, nesta ordem: o status declarado pela casa, o minuto,
+    e o placar. Gol antes do apito inicial não existe.
+    """
+    if status is not None:
+        texto = str(status).upper().replace(" ", "").replace("_", "")
+        if texto in STATUS_ENCERRADO:
+            return "encerrado"
+        if texto in STATUS_INTERVALO:
+            return "intervalo"
+        if texto in STATUS_PRIMEIRO_TEMPO:
+            return "1h"
+        if texto in STATUS_SEGUNDO_TEMPO:
+            return "2h"
+        if texto in STATUS_AO_VIVO:
+            return "1h" if minute <= 45 else "2h"
+
     if minute <= 0:
-        return "pre_match"
+        # Sem minuto mas com gol: o jogo começou e o relógio não veio.
+        return "1h" if placar > 0 else "pre_match"
     if minute <= 45:
         return "1h"
     if minute < 90:

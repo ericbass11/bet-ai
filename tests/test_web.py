@@ -25,9 +25,9 @@ def make_event(minute=70, sh=1, sa=0, event_id="e1"):
             Market(
                 key=MarketKey.MATCH_ODDS,
                 selections=[
-                    Selection(outcome="home", odds=1.60),
-                    Selection(outcome="draw", odds=6.00),
-                    Selection(outcome="away", odds=15.0),
+                    Selection(outcome="home", odds=1.10),
+                    Selection(outcome="draw", odds=11.00),
+                    Selection(outcome="away", odds=34.0),
                 ],
             )
         ],
@@ -273,3 +273,35 @@ def test_porta_ocupada_da_mensagem_util(capsys, tmp_path, monkeypatch):
         assert f"--port {porta + 1}" in erro
     finally:
         ocupado.server_close()
+
+
+def test_interface_informa_mercado_descartado():
+    """Mercado sumir da tela sem explicação parece defeito; com o aviso, o
+    usuário entende que a casa mandou odds suspensas."""
+    from betai.models import Event, Market, MarketKey, MatchState, Selection
+    from betai.pipeline import Pipeline
+    from betai.web import Estado
+
+    ruim = Event(
+        event_id="r", league="L", home_team="A", away_team="B",
+        starts_at=datetime.now(timezone.utc), source="t",
+        state=MatchState(),
+        markets=[
+            Market(
+                key=MarketKey.MATCH_ODDS,
+                selections=[
+                    Selection(outcome="home", odds=6.25),
+                    Selection(outcome="draw", odds=5.77),
+                    Selection(outcome="away", odds=15.00),
+                ],
+            )
+        ],
+    )
+    estado = Estado()
+    estado.atualizar([Pipeline().analyze(ruim)])
+    jogo = estado.snapshot()["analises"][0]
+    assert jogo["mercados_descartados"] == 1
+    assert jogo["apostas"] == []
+
+    from betai.web import PAGINA
+    assert "mercados_descartados" in PAGINA

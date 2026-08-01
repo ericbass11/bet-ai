@@ -116,3 +116,27 @@ def remove_vig(odds: Sequence[float], method: Method = "power") -> list[float]:
 def margin(odds: Sequence[float]) -> float:
     """Margem da casa em fração (0.06 == 6%)."""
     return sum(1.0 / o for o in odds) - 1.0
+
+
+# Faixa plausível de overround. Uma casa opera entre 1% e 20% de margem;
+# valores fora disso significam mercado suspenso, incompleto ou já resolvido.
+MIN_OVERROUND = 0.99
+MAX_OVERROUND = 1.35
+
+
+def is_plausible(odds: Sequence[float]) -> bool:
+    """O conjunto de odds forma um livro coerente?
+
+    Esta checagem existe porque `remove_vig` normaliza qualquer entrada para
+    somar 1 — inclusive um mercado com metade das seleções faltando. Um livro
+    somando 0.40 vira três probabilidades inventadas, e comparar as odds
+    originais contra elas produz "vantagens" de várias centenas por cento que
+    são puro artefato.
+
+    Overround abaixo de 1 seria a casa pagando para receber aposta; muito
+    acima significa que o que chegou não é um mercado completo.
+    """
+    if len(odds) < 2 or any(o <= 1.0 for o in odds):
+        return False
+    total = sum(1.0 / o for o in odds)
+    return MIN_OVERROUND <= total <= MAX_OVERROUND

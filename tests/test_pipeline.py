@@ -108,7 +108,7 @@ def test_divergencia_ao_vivo_gera_valor():
 
     # 80 minutos, mandante 2-0: o mandante é quase certo, mas a casa ainda
     # paga 1.60 nele.
-    ao_vivo = make_event(minute=80, sh=2, sa=0, event_id="jogo", odds_1x2=(1.60, 6.0, 15.0))
+    ao_vivo = make_event(minute=80, sh=2, sa=0, event_id="jogo", odds_1x2=(1.10, 11.0, 34.0))
     analysis = pipeline.analyze(ao_vivo)
 
     assert any(b.outcome == "home" for b in analysis.value_bets)
@@ -248,7 +248,7 @@ def test_com_baseline_o_valor_volta_a_aparecer():
     pipeline = Pipeline(min_edge=0.03)
     pipeline.register_baseline(make_event(event_id="com-base"))
     ao_vivo = make_event(
-        minute=80, sh=2, sa=0, event_id="com-base", odds_1x2=(1.60, 6.0, 15.0)
+        minute=80, sh=2, sa=0, event_id="com-base", odds_1x2=(1.10, 11.0, 34.0)
     )
     analysis = pipeline.analyze(ao_vivo)
     assert analysis.baseline_source == "pre_match"
@@ -296,7 +296,7 @@ def test_baseline_cedo_persiste_e_gera_valor_depois(tmp_path):
         # Novo processo: baseline recuperado do banco.
         outro = Pipeline(min_edge=0.03, store=store)
         tarde = make_event(
-            minute=80, sh=2, sa=0, event_id="jogo", odds_1x2=(1.60, 6.0, 15.0)
+            minute=80, sh=2, sa=0, event_id="jogo", odds_1x2=(1.10, 11.0, 34.0)
         )
         analysis = outro.analyze(tarde)
 

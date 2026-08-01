@@ -22,12 +22,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .engine.devig import Method, remove_vig
+from .engine.devig import Method, is_plausible, remove_vig
 from .engine.live import LiveConfig, live_matrix
 from .engine.poisson import DEFAULT_RHO, ScoreMatrix, calibrate
 from .engine.value import evaluate, filter_value
-from .models import Analysis, Event, MarketKey, ValueBet
+from .models import Analysis, Event, Market, MarketKey, ValueBet
 from .storage import Store
+
+
+def usable_markets(event: Event) -> list[Market]:
+    """Mercados cujo livro fecha — os demais não dizem nada sobre o jogo.
+
+    Um mercado com seleções faltando ou suspensas chega com as implícitas
+    somando bem menos que 1. A remoção de margem normaliza qualquer coisa para
+    somar 1, então esse mercado vira probabilidades inventadas e "vantagens"
+    de centenas por cento. Descartar é a única leitura honesta.
+    """
+    return [m for m in event.markets if is_plausible([s.odds for s in m.selections])]
 
 
 def market_probabilities(event: Event, method: Method = "power") -> dict[str, float]:
@@ -36,10 +47,8 @@ def market_probabilities(event: Event, method: Method = "power") -> dict[str, fl
     Chaves seguem o formato `mercado[@linha].seleção`, ex: `over_under@2.5.over`.
     """
     out: dict[str, float] = {}
-    for mkt in event.markets:
+    for mkt in usable_markets(event):
         odds = [s.odds for s in mkt.selections]
-        if len(odds) < 2:
-            continue
         fair = remove_vig(odds, method)
         suffix = f"@{mkt.line}" if mkt.line is not None else ""
         for sel, p in zip(mkt.selections, fair):
@@ -62,13 +71,17 @@ def model_probabilities(matrix: ScoreMatrix, event: Event) -> dict[str, float]:
     for outcome, p in matrix.btts().items():
         out[f"{MarketKey.BTTS.value}.{outcome}"] = p
 
-    for mkt in event.markets_of(MarketKey.OVER_UNDER):
+    for mkt in usable_markets(event):
+        if mkt.key != MarketKey.OVER_UNDER:
+            continue
         line = mkt.line if mkt.line is not None else 2.5
         ou = matrix.over_under(line)
         out[f"{MarketKey.OVER_UNDER.value}@{line}.over"] = ou["over"]
         out[f"{MarketKey.OVER_UNDER.value}@{line}.under"] = ou["under"]
 
-    for mkt in event.markets_of(MarketKey.ASIAN_HANDICAP):
+    for mkt in usable_markets(event):
+        if mkt.key != MarketKey.ASIAN_HANDICAP:
+            continue
         line = mkt.line if mkt.line is not None else 0.0
         ah = matrix.asian_handicap(line)
         out[f"{MarketKey.ASIAN_HANDICAP.value}@{line}.home"] = ah["home"]
@@ -82,14 +95,15 @@ def _fair_inputs(event: Event, method: Method) -> tuple[float | None, float | No
     p_home = p_away = p_over = None
     over_line = 2.5
 
-    mo = event.market(MarketKey.MATCH_ODDS)
+    utilizaveis = usable_markets(event)
+    mo = next((m for m in utilizaveis if m.key == MarketKey.MATCH_ODDS), None)
     if mo and len(mo.selections) >= 3:
         fair = remove_vig([s.odds for s in mo.selections], method)
         by_outcome = dict(zip([s.outcome for s in mo.selections], fair))
         p_home = by_outcome.get("home")
         p_away = by_outcome.get("away")
 
-    ou_markets = event.markets_of(MarketKey.OVER_UNDER)
+    ou_markets = [m for m in utilizaveis if m.key == MarketKey.OVER_UNDER]
     if ou_markets:
         # A linha mais próxima de 2.5 é a mais líquida e a mais informativa.
         mkt = min(ou_markets, key=lambda m: abs((m.line or 2.5) - 2.5))
@@ -257,7 +271,7 @@ class Pipeline:
         market: dict[str, float],
     ) -> list[ValueBet]:
         bets: list[ValueBet] = []
-        for mkt in event.markets:
+        for mkt in usable_markets(event):
             suffix = f"@{mkt.line}" if mkt.line is not None else ""
             for sel in mkt.selections:
                 key = f"{mkt.key.value}{suffix}.{sel.outcome}"

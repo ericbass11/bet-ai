@@ -65,8 +65,12 @@ class Estado:
 
 
 def _serializar(a: Analysis) -> dict[str, Any]:
+    from .pipeline import usable_markets
+
     e = a.event
+    descartados = len(e.markets) - len(usable_markets(e))
     return {
+        "mercados_descartados": descartados,
         "id": e.event_id,
         "casa": e.home_team,
         "fora": e.away_team,
@@ -356,6 +360,12 @@ function desenhar(dados) {
 
   for (const j of jogos) {
     html += `<div class="jogo ${j.apostas.length ? 'tem-valor' : ''}">${cabecalho(j)}`;
+    if (j.mercados_descartados) {
+      html += `<div class="aviso">${j.mercados_descartados} mercado(s) ignorado(s):
+        as odds enviadas pela casa não formam um livro coerente — normalmente
+        significa aposta suspensa. Analisar isso inventaria vantagem que não
+        existe.</div>`;
+    }
     if (j.base === 'live_inverted') {
       html += `<div class="aviso">Sem odds de antes do jogo — não dá para discordar
         do mercado. Deixe o programa rodando para capturar a referência no início

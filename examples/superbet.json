@@ -21,12 +21,12 @@
     "Se você descobrir o parâmetro de pré-jogo numa captura nova, declare-o",
     "em `params_upcoming` e o baseline passa a vir de lá, ainda melhor.",
     "",
+    "  - o minuto vem vazio em parte dos jogos; `metadata.periodStatus` (1H/2H/HT) é o sinal confiável de que a bola está rolando;",
     "IMPORTANTE: o endpoint de listagem devolve apenas o mercado principal",
     "(Resultado Final), mesmo com `marketCount: 22`. Os demais mercados vêm",
     "do endpoint por evento. Para mapeá-los, capture a página de um jogo",
     "específico e rode `bet-ai inspect` nessa captura."
   ],
-
   "url": "https://production-superbet-offer-br.freetls.fastly.net/v2/pt-BR/events/by-date",
   "params": {
     "currentStatus": "active",
@@ -36,9 +36,7 @@
   "headers": {
     "Accept": "application/json"
   },
-
   "events_path": "data",
-
   "fields": {
     "event_id": "eventId",
     "league": {
@@ -54,15 +52,23 @@
         "49157": "Brasil - Copa do Brasil Feminina"
       }
     },
-    "home_team": { "path": "matchName", "split": "·", "index": 0 },
-    "away_team": { "path": "matchName", "split": "·", "index": 1 },
+    "home_team": {
+      "path": "matchName",
+      "split": "·",
+      "index": 0
+    },
+    "away_team": {
+      "path": "matchName",
+      "split": "·",
+      "index": 1
+    },
     "minute": "metadata.minutes",
     "score_home": "metadata.homeTeamScore",
     "score_away": "metadata.awayTeamScore",
     "red_cards_home": "metadata.homeTeamRedCards",
-    "red_cards_away": "metadata.awayTeamRedCards"
+    "red_cards_away": "metadata.awayTeamRedCards",
+    "status": "metadata.periodStatus"
   },
-
   "markets": [
     {
       "key": "1x2",
