@@ -50,8 +50,30 @@ odds da casa
 
 ## Instalação
 
+Requer Python 3.10+.
+
 ```bash
+git clone https://github.com/ericbass11/bet-ai.git
+cd bet-ai
+git checkout claude/football-analysis-ai-5kc8mn
+
 uv venv && uv pip install -e ".[dev]"
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+```
+
+Sem `uv`, o equivalente com as ferramentas padrão:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Confira que ficou de pé:
+
+```bash
+pytest        # 106 testes, sem rede
+bet-ai live   # jogos sintéticos do provedor mock
 ```
 
 ## Uso
