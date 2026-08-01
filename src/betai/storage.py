@@ -12,7 +12,7 @@ import json
 import sqlite3
 import threading
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -164,6 +164,59 @@ class Store:
                    GROUP BY event_id
                    ORDER BY last_seen DESC"""
             ).fetchall()
+
+    def result_for(self, event_id: str) -> tuple[int, int] | None:
+        """Placar final de um evento, ou `None` se ainda não foi registrado."""
+        with self._lock, closing(self.conn.cursor()) as cur:
+            row = cur.execute(
+                "SELECT score_home, score_away FROM results WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        return (row["score_home"], row["score_away"]) if row else None
+
+    # Depois de quanto tempo sem notícia um jogo é dado por encerrado. Uma
+    # partida dura ~2h; sumir do feed por 3 horas não deixa outra leitura.
+    ABANDONO_HORAS = 3
+
+    def settle_finished(self, agora: datetime | None = None) -> list[tuple[str, int, int]]:
+        """Anota o placar final dos jogos que terminaram. Devolve os anotados.
+
+        O placar final não precisa ser buscado: o programa já viu o jogo em
+        todos os minutos, e o último estado observado *é* o resultado. Hoje
+        isso era descartado, e sem resultado não há como medir se o modelo
+        acerta — que é a única pergunta que importa no fim.
+
+        Um jogo é dado por encerrado quando a casa diz que encerrou, ou quando
+        some do feed por horas. O segundo caso existe porque nem toda casa
+        publica o status final: o jogo simplesmente desaparece da lista.
+        """
+        agora = agora or datetime.now(timezone.utc)
+        limite = (agora - timedelta(hours=self.ABANDONO_HORAS)).isoformat()
+
+        with self._lock, closing(self.conn.cursor()) as cur:
+            rows = cur.execute(
+                """SELECT s.event_id, s.payload, s.captured_at
+                     FROM snapshots s
+                     JOIN (SELECT event_id, MAX(captured_at) AS ultimo
+                             FROM snapshots GROUP BY event_id) u
+                       ON u.event_id = s.event_id AND u.ultimo = s.captured_at
+                    WHERE s.event_id NOT IN (SELECT event_id FROM results)"""
+            ).fetchall()
+
+        anotados: list[tuple[str, int, int]] = []
+        for row in rows:
+            evento = Event.model_validate_json(row["payload"])
+            encerrado = evento.state.period == "encerrado"
+            sumiu = row["captured_at"] < limite and evento.state.minute > 0
+            if not (encerrado or sumiu):
+                continue
+            anotados.append(
+                (row["event_id"], evento.state.score_home, evento.state.score_away)
+            )
+
+        for event_id, casa, fora in anotados:
+            self.save_result(event_id, casa, fora)
+        return anotados
 
     def value_bet_history(self, event_id: str | None = None) -> list[dict]:
         """Todas as apostas de valor registradas, com o placar final se houver.

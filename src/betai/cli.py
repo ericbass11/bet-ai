@@ -194,6 +194,14 @@ def collect_live_analyses(
         if store:
             store.save_analysis(analysis)
         analises.append(analysis)
+
+    # O placar final não precisa ser buscado: o último estado que vimos de um
+    # jogo encerrado é o resultado. Sem isto o programa opina para sempre e
+    # nunca descobre se acertou.
+    if store:
+        for event_id, casa, fora in store.settle_finished():
+            print(f"{DIM}Encerrado: {event_id} {casa}-{fora}{RESET}", file=sys.stderr)
+
     return analises
 
 
