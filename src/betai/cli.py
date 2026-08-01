@@ -274,6 +274,101 @@ def cmd_settle(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_discover(args: argparse.Namespace, settings: Settings) -> int:
+    """Infere um field_map a partir de uma captura do DevTools."""
+    from .discover import build_field_map, discover, extract_from_har
+
+    path = Path(args.captura)
+    if not path.exists():
+        print(f"Arquivo não encontrado: {path}", file=sys.stderr)
+        return 1
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and "log" in raw and "entries" in raw.get("log", {}):
+        payloads = extract_from_har(raw)
+        print(f"HAR com {len(payloads)} respostas JSON.")
+    else:
+        payloads = [(args.url or "COLE_A_URL_AQUI", raw)]
+
+    maps = discover(payloads)
+    if not maps:
+        print(
+            "Não encontrei nenhuma lista de eventos com odds nesta captura.\n"
+            "Verifique se capturou a requisição certa (a que traz os jogos, não\n"
+            "a de imagens ou telemetria) e se salvou o HAR *com* o conteúdo.",
+            file=sys.stderr,
+        )
+        return 1
+
+    best = maps[0]
+    print(f"\n{BOLD}Melhor candidato{RESET} (confiança {best['_confianca']:.0%})")
+    print(f"  url: {best['url']}")
+    print(f"  lista de eventos: {best['events_path'] or '(raiz)'}")
+    print(f"  {DIM}sinais: {', '.join(best['_como_foi_inferido'])}{RESET}")
+    print(f"  campos: {', '.join(best['fields'])}")
+    print(f"  mercados: {len(best['markets'])}")
+    for mkt in best["markets"]:
+        rotulos = ", ".join(mkt.get("_rotulos_encontrados", []))
+        print(f"    {mkt['key']:<16} {mkt['path']}  {DIM}[{rotulos}]{RESET}")
+
+    if len(maps) > 1:
+        print(f"  {DIM}(+{len(maps) - 1} outras respostas geraram mapa){RESET}")
+
+    out = Path(args.output)
+    out.write_text(json.dumps(best, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\nRascunho salvo em {BOLD}{out}{RESET}")
+    print(
+        f"{YELLOW}Revise antes de usar:{RESET} a inferência acerta a estrutura, mas o "
+        f"`outcome_map` (traduzir os rótulos da casa para home/draw/away) e a `line` "
+        f"de cada mercado precisam de conferência humana."
+    )
+    return 0
+
+
+def cmd_probe(args: argparse.Namespace, settings: Settings) -> int:
+    """Consulta uma URL e descreve o que voltou. Rode da sua própria máquina."""
+    import httpx
+
+    from .discover import build_field_map
+
+    ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
+    try:
+        resp = httpx.get(args.url, timeout=20.0, headers={"User-Agent": ua}, follow_redirects=True)
+    except httpx.HTTPError as exc:
+        print(f"Falha de rede: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"HTTP {resp.status_code} · {len(resp.content)} bytes · {resp.headers.get('content-type', '?')}")
+    if resp.status_code == 403:
+        print(
+            f"{YELLOW}403 — pode ser geobloqueio, WAF ou exigência de sessão. "
+            f"Se o site só atende o Brasil, isto precisa rodar de um IP brasileiro.{RESET}"
+        )
+        print(resp.text[:300])
+        return 1
+    if resp.status_code != 200:
+        print(resp.text[:300])
+        return 1
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        print(f"{YELLOW}A resposta não é JSON — provavelmente é o HTML da página.{RESET}")
+        print("Use o DevTools para achar a chamada XHR que traz os jogos.")
+        return 1
+
+    fmap = build_field_map(args.url, payload)
+    if not fmap:
+        print("JSON válido, mas sem estrutura de eventos+odds reconhecível.")
+        return 1
+
+    print(f"Lista de eventos em '{fmap['events_path'] or '(raiz)'}', "
+          f"{len(fmap['markets'])} mercados, confiança {fmap['_confianca']:.0%}")
+    Path(args.output).write_text(json.dumps(fmap, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Rascunho salvo em {args.output}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bet-ai",
@@ -309,6 +404,22 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--event-id")
     report.add_argument("--limit", type=int, default=20)
     report.set_defaults(func=cmd_report)
+
+    discover = sub.add_parser(
+        "discover",
+        help="infere um field_map a partir de um HAR ou JSON capturado no DevTools",
+    )
+    discover.add_argument("captura", help="arquivo .har ou .json salvo do navegador")
+    discover.add_argument("--url", help="URL do endpoint (se a captura for um .json solto)")
+    discover.add_argument("-o", "--output", default="field_map.json")
+    discover.set_defaults(func=cmd_discover)
+
+    probe = sub.add_parser(
+        "probe", help="consulta uma URL e descreve o JSON que voltou (rode da sua máquina)"
+    )
+    probe.add_argument("url")
+    probe.add_argument("-o", "--output", default="field_map.json")
+    probe.set_defaults(func=cmd_probe)
 
     settle = sub.add_parser("settle", help="registra o placar final de um evento")
     settle.add_argument("event_id")

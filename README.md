@@ -67,6 +67,7 @@ bet-ai watch --interval 60 # reanalisa a cada 60s, gravando a série temporal
 bet-ai history             # eventos já capturados no banco
 bet-ai settle mock-0 2 1   # registra o placar final
 bet-ai report              # resumo das apostas de valor registradas
+bet-ai discover captura.har # infere o field_map de uma casa a partir do DevTools
 ```
 
 Com a camada de IA:
@@ -97,6 +98,50 @@ bet-ai live
 Para o `generic_json`, aponte `BETAI_FIELD_MAP` para um arquivo como
 `examples/field_map.json`, que descreve onde cada campo vive no JSON do
 provedor. O provedor verifica o `robots.txt` e aplica rate limit por padrão.
+
+### Descobrindo o mapeamento de uma casa
+
+Escrever o `field_map.json` na mão exige rastrear cada campo dentro do JSON da
+casa. O comando `discover` faz isso por inferência:
+
+```bash
+# 1. No navegador, abra a página de jogos ao vivo da casa.
+# 2. DevTools → Network → filtre por Fetch/XHR
+# 3. Botão direito → "Save all as HAR with content"
+bet-ai discover captura.har -o examples/minha_casa.json
+```
+
+Ele encontra qual das respostas capturadas traz os jogos (descartando
+telemetria, imagens e afins), deduz onde estão times, placar, minuto e odds, e
+salva um rascunho com nível de confiança. Também aceita um `.json` solto
+copiado do painel Response.
+
+O que a inferência **não** resolve sozinho, e você precisa conferir:
+
+- `outcome_map` — traduzir os rótulos da casa (`"1"`, `"Mais de 2.5"`) para o
+  vocabulário interno (`home`, `over`);
+- `key` de cada mercado — é chutada pelo texto dos rótulos;
+- `line` — over/under e handicap precisam da linha explícita.
+
+Se você estiver num IP com acesso ao site, `bet-ai probe <url>` consulta o
+endpoint direto e faz a mesma inferência sem passar pelo HAR.
+
+### Geobloqueio
+
+Casas brasileiras reguladas (`.bet.br`) restringem acesso por região — é
+exigência legal, não antibot. De fora do Brasil a resposta é `403` no edge do
+CDN, antes de qualquer verificação de `robots.txt`:
+
+```
+HTTP/2 403 · server: CloudFront
+"Our location services have detected you are in a country
+ that this site does not offer its services to."
+```
+
+Não há configuração no bet-ai que contorne isso, e contornar seria burlar um
+controle de acesso deliberado. A captura precisa ser feita de dentro do país.
+É exatamente para esse caso que existe o fluxo via HAR: você captura no seu
+navegador, o `discover` monta o mapa.
 
 **Sobre coletar de sites de apostas:** a maioria das casas proíbe coleta
 automatizada nos Termos de Uso. O código respeita `robots.txt` e espaça as
@@ -166,9 +211,10 @@ snapshots é poder recalibrá-los contra o seu próprio histórico.
 pytest
 ```
 
-83 testes cobrindo os quatro métodos de devig, a matriz de placares e todos os
+106 testes cobrindo os quatro métodos de devig, a matriz de placares e todos os
 mercados derivados dela, a calibração ida-e-volta, o ajuste ao vivo, o
-dimensionamento por Kelly, os provedores e o pipeline ponta a ponta.
+dimensionamento por Kelly, os provedores, a inferência de mapeamento e o
+pipeline ponta a ponta.
 
 ## Aviso
 
