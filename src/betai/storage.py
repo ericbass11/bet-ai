@@ -218,6 +218,34 @@ class Store:
             self.save_result(event_id, casa, fora)
         return anotados
 
+    def settled_analyses(self) -> list[dict]:
+        """Análises de jogos cujo placar final já é conhecido.
+
+        É a matéria-prima da medição: de um lado o que o modelo disse, do
+        outro o que aconteceu. Análise de jogo sem resultado fica de fora —
+        não dá para pontuar o que ainda não terminou.
+        """
+        with self._lock, closing(self.conn.cursor()) as cur:
+            rows = cur.execute(
+                """SELECT a.event_id, a.created_at, a.minute, a.probabilities,
+                          a.value_bets, r.score_home, r.score_away
+                     FROM analyses a
+                     JOIN results r ON r.event_id = a.event_id
+                    ORDER BY a.event_id, a.created_at"""
+            ).fetchall()
+
+        return [
+            {
+                "event_id": row["event_id"],
+                "created_at": row["created_at"],
+                "minute": row["minute"],
+                "probabilities": json.loads(row["probabilities"]),
+                "value_bets": json.loads(row["value_bets"]),
+                "score": (row["score_home"], row["score_away"]),
+            }
+            for row in rows
+        ]
+
     def value_bet_history(self, event_id: str | None = None) -> list[dict]:
         """Todas as apostas de valor registradas, com o placar final se houver.
 

@@ -393,6 +393,77 @@ def cmd_report(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_desempenho(args: argparse.Namespace, settings: Settings) -> int:
+    """A nota do modelo contra os jogos que já terminaram."""
+    from .report import desempenho
+
+    with Store(settings.db_path) as store:
+        rel = desempenho(store)
+
+    if not rel.analises:
+        print(
+            "Nenhum jogo terminado com análise gravada ainda.\n\n"
+            "Deixe `bet-ai web` ou `bet-ai watch` rodando: o placar final é\n"
+            "anotado sozinho quando a partida acaba. Duas ou três semanas de\n"
+            "jogos dão material para uma leitura honesta."
+        )
+        return 0
+
+    print(f"{BOLD}Base{RESET}: {rel.jogos} jogo(s) terminado(s), {rel.analises} análise(s).\n")
+
+    # ---------- honestidade ----------
+    print(f"{BOLD}O modelo é honesto?{RESET}")
+    if not rel.faixas:
+        print(f"  {DIM}Ainda não há casos suficientes em nenhuma faixa.{RESET}")
+    else:
+        print(f"  {'faixa':<12} {'casos':>7} {'prometeu':>10} {'entregou':>10} {'desvio':>9}")
+        for f in rel.faixas:
+            cor = GREEN if abs(f.desvio) < 0.05 else YELLOW
+            print(
+                f"  {f.de:.0%}-{f.ate:.0%}".ljust(14)
+                + f"{f.n:>7} {f.previsto:>9.1%} {f.observado:>10.1%} "
+                + f"{cor}{f.desvio:>+9.1%}{RESET}"
+            )
+        print(
+            f"\n  {DIM}Desvio positivo = prometeu mais do que entregou (otimista).\n"
+            f"  Análises do mesmo jogo se repetem a cada ciclo, então os casos\n"
+            f"  não são independentes — leia a tendência, não o número exato.{RESET}"
+        )
+
+    # ---------- dinheiro ----------
+    g = rel.geral
+    cor = GREEN if g.lucro > 0 else YELLOW
+    print(f"\n{BOLD}Teria dado lucro?{RESET}")
+    print(f"  {g.n} aposta(s), {g.ganhas} ganha(s), {g.anuladas} anulada(s)")
+    print(f"  acerto {g.taxa_de_acerto:.1%} · {cor}retorno {g.roi:+.1%} sobre o giro{RESET}")
+    print(f"  banca com o stake sugerido: 1.00 → {BOLD}{rel.banca_final:.2f}{RESET}")
+    print(
+        f"  {DIM}Uma aposta por seleção, na primeira vez que apareceu — contar\n"
+        f"  de novo a cada ciclo mediria a persistência do sinal, não o retorno.{RESET}"
+    )
+
+    # ---------- onde erra ----------
+    if rel.por_mercado:
+        print(f"\n{BOLD}Por mercado{RESET}")
+        for nome, r in rel.por_mercado.items():
+            cor = GREEN if r.lucro > 0 else YELLOW
+            print(f"  {nome:<16} {r.n:>4} aposta(s)  {cor}{r.roi:>+7.1%}{RESET}")
+
+    if rel.por_minuto:
+        print(f"\n{BOLD}Por momento do jogo{RESET}")
+        for nome, r in rel.por_minuto.items():
+            cor = GREEN if r.lucro > 0 else YELLOW
+            print(f"  {nome:<16} {r.n:>4} aposta(s)  {cor}{r.roi:>+7.1%}{RESET}")
+
+    if g.n < 100:
+        print(
+            f"\n{YELLOW}Amostra pequena ({g.n} apostas).{RESET} Com menos de umas\n"
+            f"poucas centenas, a sorte pesa mais que o modelo em qualquer\n"
+            f"conclusão que você tirar daqui."
+        )
+    return 0
+
+
 def cmd_settle(args: argparse.Namespace, settings: Settings) -> int:
     with Store(settings.db_path) as store:
         store.save_result(args.event_id, args.home, args.away)
@@ -787,6 +858,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     history = sub.add_parser("history", help="lista eventos já capturados")
     history.set_defaults(func=cmd_history)
+
+    desemp = sub.add_parser(
+        "desempenho", help="a nota do modelo contra os jogos que já terminaram"
+    )
+    desemp.set_defaults(func=cmd_desempenho)
 
     report = sub.add_parser("report", help="resumo das apostas de valor registradas")
     report.add_argument("--event-id")
