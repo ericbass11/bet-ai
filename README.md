@@ -66,8 +66,14 @@ Sem `uv`, o equivalente com as ferramentas padrão:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip          # necessário: instalação editável exige pip ≥ 21.3
 pip install -e ".[dev]"
 ```
+
+O upgrade do pip não é opcional. Versões anteriores à 21.3 não implementam a
+PEP 660 e recusam projetos sem `setup.py`, com a mensagem enganosa
+*"Directory cannot be installed in editable mode"* — o diretório está certo,
+o pip é que é velho. O venv do macOS costuma vir com uma dessas.
 
 Confira que ficou de pé:
 
