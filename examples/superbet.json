@@ -77,6 +77,19 @@
     "red_cards_away": "metadata.awayTeamRedCards",
     "status": "metadata.periodStatus"
   },
+  "_sobre_stats": [
+    "Só escanteio e amarelo — é tudo que esta casa publica junto com as odds.",
+    "Nada disso alimenta o modelo hoje; é coleta para poder medir depois se",
+    "acrescentam informação além do que as odds ao vivo já embutem.",
+    "Chutes no gol, ataques perigosos e xG não aparecem em nenhuma resposta da",
+    "captura — o painel do site transmite por WebSocket, que o HAR não grava."
+  ],
+  "stats": {
+    "corners_home": "metadata.homeTeamCorners",
+    "corners_away": "metadata.awayTeamCorners",
+    "yellow_cards_home": "metadata.homeTeamYellowCards",
+    "yellow_cards_away": "metadata.awayTeamYellowCards"
+  },
   "markets": [
     {
       "key": "1x2",

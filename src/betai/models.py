@@ -73,12 +73,20 @@ class Market(BaseModel):
 
 
 class MatchStats(BaseModel):
-    """Estatísticas ao vivo, quando o provedor as expõe."""
+    """Estatísticas ao vivo, quando o provedor as expõe.
+
+    Hoje só `xg_*` alimenta o modelo. Os demais campos são coletados e
+    guardados sem serem usados, de propósito: sem histórico avaliado não há
+    como saber se acrescentam informação além do que as odds já embutem, e
+    ligar um coeficiente no chute pioraria o que já funciona.
+    """
 
     shots_on_target_home: int = 0
     shots_on_target_away: int = 0
     corners_home: int = 0
     corners_away: int = 0
+    yellow_cards_home: int = 0
+    yellow_cards_away: int = 0
     dangerous_attacks_home: int = 0
     dangerous_attacks_away: int = 0
     xg_home: float | None = None

@@ -179,3 +179,127 @@ def test_comando_avisa_quando_o_arquivo_nao_existe(tmp_path):
         codigo = cmd_estatisticas(args, Settings())
     assert codigo == 1
     assert "não encontrado" in saida.getvalue()
+
+
+# ---------- coleta das estatísticas pelo provedor ----------
+
+
+def _provedor_superbet():
+    from pathlib import Path
+
+    from betai.providers import FieldMap, GenericJsonProvider
+
+    spec = json.loads(
+        (Path(__file__).resolve().parents[1] / "examples" / "superbet.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return GenericJsonProvider(FieldMap(spec), respect_robots=False)
+
+
+EVENTO_CRU = {
+    "eventId": 14068216,
+    "tournamentId": 3,
+    "matchName": "Gandzasar Kapan·Ararat Armenia",
+    "metadata": {
+        "homeTeamScore": "2",
+        "awayTeamScore": "3",
+        "homeTeamCorners": 1,
+        "awayTeamCorners": 6,
+        "homeTeamYellowCards": 0,
+        "awayTeamYellowCards": 3,
+        "minutes": "59",
+        "periodStatus": "2H",
+    },
+    "odds": [
+        {"marketName": "Resultado Final", "code": "1", "price": 2.10},
+        {"marketName": "Resultado Final", "code": "0", "price": 3.40},
+        {"marketName": "Resultado Final", "code": "2", "price": 3.60},
+    ],
+}
+
+
+def test_provedor_coleta_escanteio_e_amarelo():
+    p = _provedor_superbet()
+    stats = p._parse_event(EVENTO_CRU).state.stats
+    p.close()
+
+    assert (stats.corners_home, stats.corners_away) == (1, 6)
+    assert (stats.yellow_cards_home, stats.yellow_cards_away) == (0, 3)
+
+
+def test_estatistica_ausente_nao_vira_zero_inventado():
+    """A casa não publica xG. Zero significaria 'nenhum xG gerado', que é
+    diferente de 'não sei' — e o modelo se comporta diferente nos dois casos."""
+    p = _provedor_superbet()
+    stats = p._parse_event(EVENTO_CRU).state.stats
+    p.close()
+
+    assert stats.xg_home is None
+    assert stats.shots_on_target_home == 0
+
+
+def test_estatistica_coletada_vai_para_o_banco(tmp_path):
+    from betai.storage import Store
+
+    p = _provedor_superbet()
+    evento = p._parse_event(EVENTO_CRU)
+    p.close()
+
+    with Store(tmp_path / "t.db") as store:
+        store.save_snapshot(evento)
+        guardado = store.snapshots_for(evento.event_id)[0]
+
+    assert guardado.state.stats.corners_away == 6
+    assert guardado.state.stats.yellow_cards_away == 3
+
+
+def test_mapa_sem_secao_stats_continua_funcionando():
+    from betai.providers import FieldMap, GenericJsonProvider
+
+    p = GenericJsonProvider(
+        FieldMap(
+            {
+                "url": "https://exemplo/api",
+                "fields": {"event_id": "id", "home_team": "a", "away_team": "b"},
+                "markets": [
+                    {
+                        "key": "1x2",
+                        "path": "odds",
+                        "outcome_field": "code",
+                        "outcome_map": {"1": "home", "0": "draw", "2": "away"},
+                    }
+                ],
+            }
+        ),
+        respect_robots=False,
+    )
+    ev = p._parse_event(
+        {
+            "id": 1,
+            "a": "Casa",
+            "b": "Fora",
+            "odds": [
+                {"code": "1", "price": 2.0},
+                {"code": "0", "price": 3.4},
+                {"code": "2", "price": 3.6},
+            ],
+        }
+    )
+    p.close()
+    assert ev.state.stats.corners_home == 0
+
+
+def test_escanteio_nao_mexe_na_probabilidade():
+    """Coletar não é usar. Ligar um coeficiente sem medição pioraria o que
+    já funciona, então o modelo tem que ignorar isso por enquanto."""
+    from betai.engine.live import live_matrix
+    from betai.models import MatchState, MatchStats
+
+    def prob(**stats):
+        estado = MatchState(
+            minute=60, period="2h", score_home=1, score_away=0, stats=MatchStats(**stats)
+        )
+        return live_matrix(1.57, 1.13, estado).match_odds()["home"]
+
+    assert prob() == prob(corners_home=11, corners_away=0, yellow_cards_away=4)

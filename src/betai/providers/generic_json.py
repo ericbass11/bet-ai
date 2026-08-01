@@ -28,6 +28,7 @@ from ..models import (
     Market,
     MarketKey,
     MatchState,
+    MatchStats,
     Selection,
 )
 from .base import Provider, ProviderError, RateLimiter
@@ -124,6 +125,10 @@ class FieldMap:
         self.url: str = spec["url"]
         self.events_path: str = spec.get("events_path", "")
         self.fields: dict[str, str] = spec.get("fields", {})
+        # Estatísticas ao vivo, no mesmo formato de `fields`. Separadas porque
+        # são opcionais e porque hoje quase nada aqui alimenta o modelo — a
+        # coleta serve para poder medir, depois, se valem alguma coisa.
+        self.stats: dict[str, Any] = spec.get("stats", {})
         self.markets: list[dict[str, Any]] = spec.get("markets", [])
         self.headers: dict[str, str] = spec.get("headers", {})
         self.params: dict[str, str] = spec.get("params", {})
@@ -295,6 +300,34 @@ class GenericJsonProvider(Provider):
             return lookup.get(str(value), spec.get("lookup_default", value))
         return value
 
+    # Quais campos de MatchStats são contagem e quais são fração. Um mapa
+    # declarando `possession_home: 58` precisa virar float; escanteio, int.
+    _STATS_DECIMAIS = {"xg_home", "xg_away", "possession_home"}
+
+    def _parse_stats(self, raw: Any) -> MatchStats:
+        """Lê as estatísticas ao vivo declaradas no mapa.
+
+        Campo ausente no payload fica no padrão — zero para contagem, `None`
+        para xG e posse, que é o que faz o modelo ignorá-los em vez de tratar
+        ausência como "aconteceu zero".
+        """
+        if not self.map.stats:
+            return MatchStats()
+
+        valores: dict[str, Any] = {}
+        for nome, spec in self.map.stats.items():
+            if nome not in MatchStats.model_fields:
+                continue
+            bruto = self._field(raw, spec)
+            if bruto is None:
+                continue
+            convertido = (
+                _as_float(bruto) if nome in self._STATS_DECIMAIS else _as_int(bruto)
+            )
+            if convertido is not None:
+                valores[nome] = convertido
+        return MatchStats(**valores)
+
     def _parse_event(self, raw: Any) -> Event | None:
         f = self.map.fields
         event_id = self._field(raw, f.get("event_id", "id"))
@@ -317,6 +350,7 @@ class GenericJsonProvider(Provider):
             score_away=score_away,
             red_cards_home=_as_int(self._field(raw, f.get("red_cards_home"))),
             red_cards_away=_as_int(self._field(raw, f.get("red_cards_away"))),
+            stats=self._parse_stats(raw),
         )
 
         markets = [m for spec in self.map.markets for m in self._parse_markets(raw, spec)]
