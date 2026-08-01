@@ -735,6 +735,19 @@ def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
 
     achados = [(url, campos) for url, p in payloads if (campos := buscar_campos(p, termos))]
     if not achados:
+        if len(payloads) == 1 and not payloads[0][0]:
+            # Resposta solta colada num arquivo, não uma captura inteira. Aqui
+            # não achar palavra conhecida não é falha: os campos podem se
+            # chamar qualquer coisa, e mostrar o formato é o que ajuda.
+            from .discover import summarize
+
+            print(
+                f"{DIM}Nenhum nome de campo conhecido — mostrando o formato "
+                f"para você e eu lermos juntos.{RESET}\n"
+            )
+            print(json.dumps(summarize(payloads[0][1]), ensure_ascii=False, indent=2))
+            return 0
+
         print(
             "Nenhum campo de estatística nesta captura.\n\n"
             "O painel talvez carregue de outro domínio. No DevTools, deixe o filtro\n"

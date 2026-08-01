@@ -460,3 +460,49 @@ def test_contendo_sem_correspondencia_avisa(tmp_path):
     codigo, saida = _rodar(tmp_path, _har(("https://casa.example/api", SUPERBET)), contendo="xyz")
     assert codigo == 1
     assert "xyz" in saida
+
+
+def test_json_solto_sem_palavra_conhecida_mostra_o_formato(tmp_path):
+    """Resposta colada num arquivo: os campos podem se chamar qualquer coisa,
+    e o que ajuda é ver o formato, não uma mensagem de erro."""
+    import argparse
+    import contextlib
+    import io
+
+    from betai.cli import cmd_estatisticas
+    from betai.config import Settings
+
+    caminho = tmp_path / "stats.json"
+    caminho.write_text(
+        json.dumps({"campoEstranho": {"casa": 7, "fora": 3}}), encoding="utf-8"
+    )
+    args = argparse.Namespace(
+        captura=str(caminho), termo=None, limite=8, listar=False, contendo=None
+    )
+    saida = io.StringIO()
+    with contextlib.redirect_stdout(saida), contextlib.redirect_stderr(saida):
+        codigo = cmd_estatisticas(args, Settings())
+
+    assert codigo == 0
+    assert "campoEstranho" in saida.getvalue()
+
+
+def test_json_solto_com_estatistica_conhecida_usa_a_busca(tmp_path):
+    import argparse
+    import contextlib
+    import io
+
+    from betai.cli import cmd_estatisticas
+    from betai.config import Settings
+
+    caminho = tmp_path / "stats.json"
+    caminho.write_text(json.dumps(SPORTRADAR), encoding="utf-8")
+    args = argparse.Namespace(
+        captura=str(caminho), termo=None, limite=8, listar=False, contendo=None
+    )
+    saida = io.StringIO()
+    with contextlib.redirect_stdout(saida), contextlib.redirect_stderr(saida):
+        codigo = cmd_estatisticas(args, Settings())
+
+    assert codigo == 0
+    assert "Shots on target" in saida.getvalue()
