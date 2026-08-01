@@ -1,6 +1,11 @@
 import pytest
 
-from betai.engine.live import LiveConfig, live_matrix, remaining_fraction
+from betai.engine.live import (
+    MATCH_MINUTES,
+    LiveConfig,
+    live_matrix,
+    remaining_fraction,
+)
 from betai.models import MatchState, MatchStats
 
 
@@ -18,7 +23,9 @@ def state(minute=0, sh=0, sa=0, rh=0, ra=0, period=None, **stats):
 
 def test_fracao_restante_nos_extremos():
     assert remaining_fraction(0) == pytest.approx(1.0)
-    assert remaining_fraction(90) == pytest.approx(0.0, abs=1e-9)
+    # Aos 90' ainda restam os acréscimos — só zera no fim deles.
+    assert remaining_fraction(90) > 0.0
+    assert remaining_fraction(MATCH_MINUTES) == pytest.approx(0.0, abs=1e-9)
     assert remaining_fraction(120) == pytest.approx(0.0, abs=1e-9)
 
 

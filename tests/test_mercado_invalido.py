@@ -85,7 +85,7 @@ def test_mercado_valido_continua_funcionando():
     """A validação não pode matar o caminho normal."""
     pipeline = Pipeline(min_edge=0.03)
     pipeline.register_baseline(evento([2.10, 3.40, 3.60], event_id="j"))
-    ao_vivo = evento([1.06, 11.00, 34.00], minute=80, sh=2, sa=0, event_id="j")
+    ao_vivo = evento([1.80, 3.80, 5.00], minute=60, sh=1, sa=0, event_id="j")
     assert usable_markets(ao_vivo)
     assert pipeline.analyze(ao_vivo).value_bets
 

@@ -23,6 +23,13 @@ from .poisson import DEFAULT_RHO, ScoreMatrix
 
 REGULATION_MINUTES = 90
 
+# Acréscimos. O relógio das casas congela em 90' enquanto o jogo continua, e
+# gol nos acréscimos é corriqueiro (~0.14 por partida). Sem isto, o modelo
+# declara o placar decidido aos 90' — com probabilidade 100% e aposta enorme
+# recomendada sobre um resultado que ainda pode mudar.
+STOPPAGE_MINUTES = 4
+MATCH_MINUTES = REGULATION_MINUTES + STOPPAGE_MINUTES
+
 # Intensidade relativa de gols ao longo do jogo: sobe de ~0.75x no apito
 # inicial para ~1.25x nos minutos finais, com média 1.0.
 INTENSITY_START = 0.75
@@ -51,17 +58,18 @@ class LiveConfig:
 def remaining_fraction(minute: int) -> float:
     """Fração da intensidade total de gols que ainda resta.
 
-    Integra a intensidade linear crescente de `minute` até 90. Retorna 0 no
-    fim do jogo e 1 antes do apito inicial.
+    Integra a intensidade crescente de `minute` até o fim do jogo, incluindo
+    os acréscimos. Aos 90' ainda sobra ~5% — o suficiente para o modelo não
+    tratar o placar como decidido enquanto a bola rola.
     """
-    m = max(0, min(minute, REGULATION_MINUTES))
+    m = max(0, min(minute, MATCH_MINUTES))
 
     def cumulative(t: float) -> float:
         # Integral de (a + (b-a)*t/T) dt, de 0 a t.
-        a, b, T = INTENSITY_START, INTENSITY_END, REGULATION_MINUTES
+        a, b, T = INTENSITY_START, INTENSITY_END, MATCH_MINUTES
         return a * t + (b - a) * t * t / (2 * T)
 
-    full = cumulative(REGULATION_MINUTES)
+    full = cumulative(MATCH_MINUTES)
     return (full - cumulative(m)) / full
 
 

@@ -33,6 +33,13 @@ def kelly(probability: float, odds: float, fraction: float = 1.0) -> float:
     return max(0.0, f * fraction)
 
 
+# Teto absoluto do stake sugerido. Kelly puro chega a mandar 25% da banca numa
+# odd de 1.05, porque o denominador (odd - 1) é minúsculo. Como a
+# probabilidade é estimada e não conhecida, esse tamanho de aposta transforma
+# um erro pequeno de modelo em prejuízo grande.
+MAX_STAKE = 0.05
+
+
 def evaluate(
     market: MarketKey,
     outcome: str,
@@ -41,6 +48,7 @@ def evaluate(
     market_probability: float,
     line: float | None = None,
     kelly_fraction: float = 0.25,
+    max_stake: float = MAX_STAKE,
 ) -> ValueBet:
     """Monta o registro de valor de uma seleção."""
     return ValueBet(
@@ -52,7 +60,7 @@ def evaluate(
         market_probability=market_probability,
         edge=edge(model_probability, odds),
         expected_value=expected_value(model_probability, odds),
-        kelly_fraction=kelly(model_probability, odds, kelly_fraction),
+        kelly_fraction=min(kelly(model_probability, odds, kelly_fraction), max_stake),
     )
 
 
@@ -60,20 +68,27 @@ def filter_value(
     bets: list[ValueBet],
     min_edge: float = 0.02,
     min_probability: float = 0.02,
+    max_probability: float = 0.95,
     max_odds: float = 30.0,
 ) -> list[ValueBet]:
     """Descarta ruído e devolve as apostas com valor, das melhores para as piores.
 
-    Os três filtros existem por motivos distintos: `min_edge` porque uma
-    vantagem de 0.5% não sobrevive ao erro do modelo; `min_probability`
-    porque a estimativa da cauda é a menos confiável; `max_odds` porque em
-    odds muito altas o erro relativo do modelo explode.
+    Cada filtro existe por um motivo distinto:
+
+    * `min_edge` — uma vantagem de 0.5% não sobrevive ao erro do modelo.
+    * `min_probability` — a estimativa da cauda é a menos confiável.
+    * `max_probability` — o outro extremo é pior ainda. Numa quase-certeza a
+      odd é ~1.05, então a vantagem percentual parece boa e o Kelly manda uma
+      aposta enorme; basta o evento improvável acontecer uma vez para apagar
+      dezenas de acertos. E é exatamente onde o modelo erra sem aviso, porque
+      não tem como distinguir 97% de 99.9%.
+    * `max_odds` — em odds muito altas o erro relativo do modelo explode.
     """
     keep = [
         b
         for b in bets
         if b.edge >= min_edge
-        and b.model_probability >= min_probability
+        and min_probability <= b.model_probability <= max_probability
         and b.odds <= max_odds
     ]
     keep.sort(key=lambda b: b.edge, reverse=True)

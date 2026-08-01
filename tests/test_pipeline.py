@@ -106,9 +106,10 @@ def test_divergencia_ao_vivo_gera_valor():
     pipeline = Pipeline(min_edge=0.03)
     pipeline.register_baseline(make_event(event_id="jogo"))
 
-    # 80 minutos, mandante 2-0: o mandante é quase certo, mas a casa ainda
-    # paga 1.60 nele.
-    ao_vivo = make_event(minute=80, sh=2, sa=0, event_id="jogo", odds_1x2=(1.10, 11.0, 34.0))
+    # 60 minutos, mandante 1-0: o modelo dá ~75% ao mandante e a casa ainda
+    # paga 1.80 nele. Cenário deliberadamente longe da quase-certeza — lá o
+    # filtro de probabilidade máxima corta, e com razão.
+    ao_vivo = make_event(minute=60, sh=1, sa=0, event_id="jogo", odds_1x2=(1.80, 3.80, 5.00))
     analysis = pipeline.analyze(ao_vivo)
 
     assert any(b.outcome == "home" for b in analysis.value_bets)

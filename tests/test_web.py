@@ -12,7 +12,7 @@ from betai.pipeline import Pipeline
 from betai.web import Estado, loop_de_coleta, servir
 
 
-def make_event(minute=70, sh=1, sa=0, event_id="e1"):
+def make_event(minute=70, sh=1, sa=0, event_id="e1", odds_1x2=(2.10, 3.40, 3.60)):
     return Event(
         event_id=event_id,
         league="Brasileirão",
@@ -25,9 +25,9 @@ def make_event(minute=70, sh=1, sa=0, event_id="e1"):
             Market(
                 key=MarketKey.MATCH_ODDS,
                 selections=[
-                    Selection(outcome="home", odds=1.10),
-                    Selection(outcome="draw", odds=11.00),
-                    Selection(outcome="away", odds=34.0),
+                    Selection(outcome="home", odds=odds_1x2[0]),
+                    Selection(outcome="draw", odds=odds_1x2[1]),
+                    Selection(outcome="away", odds=odds_1x2[2]),
                 ],
             )
         ],
@@ -37,7 +37,9 @@ def make_event(minute=70, sh=1, sa=0, event_id="e1"):
 def _analise_com_valor():
     pipeline = Pipeline(min_edge=0.03)
     pipeline.register_baseline(make_event(minute=0, sh=0, event_id="j"))
-    return pipeline.analyze(make_event(minute=80, sh=2, sa=0, event_id="j"))
+    return pipeline.analyze(
+        make_event(minute=60, sh=1, sa=0, event_id="j", odds_1x2=(1.80, 3.80, 5.00))
+    )
 
 
 # ---------- estado ----------
@@ -51,8 +53,8 @@ def test_estado_serializa_a_analise():
     assert dados["resumo"]["jogos"] == 1
     jogo = dados["analises"][0]
     assert jogo["casa"] == "Palmeiras"
-    assert jogo["placar"] == "2-0"
-    assert jogo["minuto"] == 80
+    assert jogo["placar"] == "1-0"
+    assert jogo["minuto"] == 60
     assert jogo["apostas"], "a análise tinha valor e ele sumiu na serialização"
     assert jogo["apostas"][0]["selecao"] == "home"
 
