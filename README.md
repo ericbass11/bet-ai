@@ -98,7 +98,7 @@ o pip é que é velho. O venv do macOS costuma vir com uma dessas.
 Confira que ficou de pé:
 
 ```bash
-pytest        # 158 testes, sem rede
+pytest        # 169 testes, sem rede
 bet-ai live   # jogos sintéticos do provedor mock
 ```
 
@@ -216,7 +216,14 @@ responsabilidade por ela — é sua. Onde existir API licenciada, use a API.
 
 ## Configuração
 
-Tudo por variável de ambiente (veja `.env.example`):
+Copie o modelo e edite — o arquivo é lido automaticamente:
+
+```bash
+cp .env.example .env
+```
+
+Variáveis exportadas no terminal vencem o arquivo, para testes pontuais.
+Tudo o que dá para configurar:
 
 | Variável | Padrão | O que faz |
 |---|---|---|
@@ -277,7 +284,7 @@ snapshots é poder recalibrá-los contra o seu próprio histórico.
 pytest
 ```
 
-158 testes cobrindo os quatro métodos de devig, a matriz de placares e todos os
+169 testes cobrindo os quatro métodos de devig, a matriz de placares e todos os
 mercados derivados dela, a calibração ida-e-volta, o ajuste ao vivo, o
 dimensionamento por Kelly, os provedores, a inferência de mapeamento, a
 interface web e o pipeline ponta a ponta.
