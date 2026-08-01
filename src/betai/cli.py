@@ -355,6 +355,7 @@ def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
         summarize,
         walk_arrays,
     )
+    from .providers.generic_json import dig
 
     path = Path(args.captura)
     if not path.exists():
@@ -410,15 +411,44 @@ def cmd_inspect(args: argparse.Namespace, settings: Settings) -> int:
     print(f"{BOLD}Origem{RESET}: {url}")
     print(f"{BOLD}Eventos em{RESET}: {cand.path or '(raiz)'} ({len(cand.items)} no total)\n")
 
-    print(f"{BOLD}Mercados encontrados{RESET} (para montar o outcome_map):")
     mercados = market_labels(evento)
-    if mercados:
-        for m in mercados:
-            linha = f"  linha: {m.line}" if m.line else ""
-            print(f"  {BOLD}{m.name}{RESET}")
-            print(f"    {m.path}.{m.label_field} → {', '.join(m.labels)}{linha}")
-    else:
+
+    if args.mercado:
+        # Detalhe cru de um mercado: é o que permite escrever o outcome_map
+        # sem adivinhar qual campo carrega o rótulo.
+        alvo = [m for m in mercados if args.mercado.lower() in m.name.lower()]
+        if not alvo:
+            print(f"Nenhum mercado com '{args.mercado}' no nome.", file=sys.stderr)
+            return 1
+        for m in alvo[:3]:
+            print(f"\n{BOLD}{m.name}{RESET}  {DIM}({m.path}){RESET}")
+            selecoes = [
+                s
+                for s in dig(evento, m.path, [])
+                if m.name_field is None or str(dig(s, m.name_field)) == m.name
+            ]
+            for sel in selecoes[:8]:
+                enxuto = {
+                    k: v
+                    for k, v in sel.items()
+                    if k not in {"uuid", "marketUuid", "extra", "tags", "marketTags"}
+                }
+                print(f"  {json.dumps(enxuto, ensure_ascii=False)}")
+            if len(selecoes) > 8:
+                print(f"  {DIM}... (+{len(selecoes) - 8} seleções){RESET}")
+        return 0
+
+    print(f"{BOLD}Mercados encontrados{RESET} (para montar o outcome_map):")
+    uteis = [m for m in mercados if len(m.labels) >= 2]
+    for m in uteis[: args.mercados]:
+        linha = f"  linha: {m.line}" if m.line else ""
+        print(f"  {BOLD}{m.name}{RESET}")
+        print(f"    {m.path}.{m.label_field} → {', '.join(m.labels)}{linha}")
+    if len(uteis) > args.mercados:
+        print(f"  {DIM}... (+{len(uteis) - args.mercados}; use --mercados N){RESET}")
+    if not uteis:
         print(f"  {DIM}nenhum rótulo de texto encontrado{RESET}")
+    print(f"\n{DIM}Use --mercado \"nome\" para ver as seleções cruas de um deles.{RESET}")
 
     print(f"\n{BOLD}Estrutura de um evento{RESET}:")
     print(json.dumps(summarize(evento), ensure_ascii=False, indent=2)[: args.limite])
@@ -533,6 +563,8 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument(
         "--indice", type=int, default=0, help="qual das respostas detalhar (padrão 0)"
     )
+    inspect.add_argument("--mercado", help="detalha as seleções cruas do mercado com este nome")
+    inspect.add_argument("--mercados", type=int, default=25, help="quantos mercados listar")
     inspect.add_argument("--limite", type=int, default=6000, help="máximo de caracteres")
     inspect.set_defaults(func=cmd_inspect)
 

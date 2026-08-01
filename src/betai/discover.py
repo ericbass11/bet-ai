@@ -390,6 +390,23 @@ def summarize(value: Any, depth: int = 0, max_depth: int = 6, max_items: int = 3
     return value
 
 
+def _melhor_rotulo(selecoes: list[dict], candidatos: list[str]) -> str | None:
+    """Escolhe, entre os campos possíveis, o que melhor distingue as seleções.
+
+    Vence quem tiver mais valores distintos e não-nulos: um campo preenchido
+    em todas as seleções, com um valor diferente para cada, é exatamente o que
+    serve de rótulo. Empate desfeito pela ordem em que os campos aparecem.
+    """
+    melhor, melhor_n = None, 0
+    for chave in candidatos:
+        valores = {
+            str(_dig(s, chave)) for s in selecoes if _dig(s, chave) not in (None, "")
+        }
+        if len(valores) > melhor_n:
+            melhor, melhor_n = chave, len(valores)
+    return melhor if melhor_n >= 2 or (melhor and len(selecoes) == 1) else melhor
+
+
 def _merge_keys(items: list[dict], limit: int = 40) -> dict:
     """Junta os itens numa amostra com todos os campos que aparecem.
 
@@ -459,10 +476,10 @@ def market_labels(sample: dict) -> list[MarketSample]:
                 next(iter(candidatos_nome), None),
             ),
         )
-        label_key = next(
-            (k for k in item if _matches(k, LABEL_KEYS) and isinstance(item[k], str)), None
-        )
-        if not label_key:
+        rotulos_possiveis = [
+            k for k in item if _matches(k, LABEL_KEYS) and isinstance(item[k], str)
+        ]
+        if not rotulos_possiveis:
             continue
         line_key = next((k for k in item if _matches(k, LINE_KEYS + [r"special"])), None)
 
@@ -472,6 +489,12 @@ def market_labels(sample: dict) -> list[MarketSample]:
             grupos.setdefault(nome, []).append(sel)
 
         for nome, selecoes in grupos.items():
+            # O campo de rótulo é escolhido por mercado, não uma vez para o
+            # array inteiro: na Superbet o `code` identifica bem o 1X2 mas vem
+            # nulo em "Total de Gols", onde quem distingue é o `name`.
+            label_key = _melhor_rotulo(selecoes, rotulos_possiveis)
+            if label_key is None:
+                continue
             linhas = (
                 sorted({str(_dig(s, line_key)) for s in selecoes if _dig(s, line_key) is not None})
                 if line_key
