@@ -129,35 +129,73 @@ class Pipeline:
     min_edge: float = 0.03
     kelly_fraction: float = 0.25
     store: Store | None = None
+    # Até que minuto uma observação ainda vale como baseline. Aos 5 minutos
+    # as odds ao vivo praticamente ainda são as de pré-jogo, e a correção pelo
+    # tempo decorrido é pequena o bastante para não distorcer. É o que permite
+    # o `watch` se virar sozinho quando não existe endpoint de pré-jogo.
+    early_baseline_minute: int = 5
     _baselines: dict[str, tuple[float, float]] = field(default_factory=dict)
 
-    def register_baseline(self, event: Event) -> None:
-        """Guarda o baseline de um evento a partir de um snapshot pré-jogo."""
-        if event.state.is_live:
-            return
-        self._baselines[event.event_id] = derive_baseline(
-            event, self.devig_method, self.prior_total, self.live_config.rho
+    def _usable_as_baseline(self, event: Event) -> bool:
+        return (
+            not event.state.is_live
+            or event.state.minute <= self.early_baseline_minute
+        ) and bool(event.markets)
+
+    def _derive(self, event: Event) -> tuple[float, float]:
+        """Taxas para 90 minutos a partir de um evento pré-jogo ou recém-começado.
+
+        Num jogo já iniciado, a calibração devolve as taxas dos gols restantes
+        e é preciso reescalar. Só é seguro fazer isso cedo: aos 5 minutos o
+        divisor é ~0.96, aos 87 seria 0.04 e o lambda explodiria.
+        """
+        if not event.state.is_live:
+            return derive_baseline(
+                event, self.devig_method, self.prior_total, self.live_config.rho
+            )
+
+        from .engine.live import remaining_fraction
+
+        p_home, p_away, p_over, over_line = _fair_inputs(event, self.devig_method)
+        rem_h, rem_a = calibrate(
+            p_home=p_home,
+            p_away=p_away,
+            p_over=p_over,
+            over_line=over_line,
+            prior_total=self.prior_total,
+            rho=self.live_config.rho,
+            base_home=event.state.score_home,
+            base_away=event.state.score_away,
         )
+        restante = max(remaining_fraction(event.state.minute), 0.5)
+        return rem_h / restante, rem_a / restante
+
+    def register_baseline(self, event: Event) -> None:
+        """Guarda o baseline de um evento, se ele ainda serve como referência.
+
+        Vale para jogos que não começaram e para os que acabaram de começar —
+        o primeiro que chegar fica, porque quanto mais cedo, melhor.
+        """
+        if event.event_id in self._baselines or not self._usable_as_baseline(event):
+            return
+        self._baselines[event.event_id] = self._derive(event)
 
     def _baseline_for(self, event: Event) -> tuple[tuple[float, float], str]:
         """Encontra o melhor baseline disponível e diz de onde ele veio."""
         if event.event_id in self._baselines:
             return self._baselines[event.event_id], "pre_match"
 
-        # Procura no histórico um snapshot anterior ao apito inicial.
+        # Procura no histórico o snapshot mais antigo que ainda sirva como
+        # referência: antes do apito, ou nos primeiros minutos.
         if self.store is not None:
             for snap in self.store.snapshots_for(event.event_id):
-                if not snap.state.is_live and snap.markets:
-                    baseline = derive_baseline(
-                        snap, self.devig_method, self.prior_total, self.live_config.rho
-                    )
+                if self._usable_as_baseline(snap):
+                    baseline = self._derive(snap)
                     self._baselines[event.event_id] = baseline
                     return baseline, "pre_match"
 
-        if not event.state.is_live:
-            baseline = derive_baseline(
-                event, self.devig_method, self.prior_total, self.live_config.rho
-            )
+        if self._usable_as_baseline(event):
+            baseline = self._derive(event)
             self._baselines[event.event_id] = baseline
             return baseline, "pre_match"
 

@@ -209,7 +209,7 @@ def test_repete_sem_compressao_quando_a_descompressao_falha():
             )
 
     provider.client = ClienteFalso()
-    assert provider._get_json() == {"data": {"events": []}}
+    assert provider._get_json("https://casa/api", {}) == {"data": {"events": []}}
     assert len(tentativas) == 2
     assert tentativas[1]["Accept-Encoding"] == "identity"
 
@@ -300,6 +300,74 @@ def test_erro_4xx_mostra_o_corpo_da_resposta():
 
     provider.client = ClienteQueRecusa()
     with pytest.raises(Exception) as exc:
-        provider._get_json()
+        provider._get_json("https://casa/api", {})
     assert "400" in str(exc.value)
     assert "startDate is required" in str(exc.value)
+
+
+# ---------- tradução de código para nome ----------
+
+
+def test_lookup_traduz_o_codigo_da_liga():
+    """Casas publicam só o id da liga; a tabela dá nome aos que importam."""
+    spec = {
+        "url": "u",
+        "events_path": "d",
+        "fields": {
+            "event_id": "id",
+            "home_team": "h",
+            "away_team": "a",
+            "league": {"path": "torneio", "lookup": {"489": "Argentina - Primera Nacional"}},
+        },
+        "markets": [
+            {"key": "1x2", "path": "odds", "outcome_field": "c", "odds_field": "p"}
+        ],
+    }
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False)
+    evento = {
+        "id": "1", "h": "A", "a": "B", "torneio": 489,
+        "odds": [{"c": "home", "p": 2.0}, {"c": "away", "p": 2.0}],
+    }
+    assert provider._parse_event(evento).league == "Argentina - Primera Nacional"
+
+
+def test_lookup_sem_entrada_mantem_o_codigo():
+    """Liga desconhecida aparece pelo número, não vira 'None'."""
+    spec = {
+        "url": "u",
+        "events_path": "d",
+        "fields": {
+            "event_id": "id",
+            "home_team": "h",
+            "away_team": "a",
+            "league": {"path": "torneio", "lookup": {"489": "Argentina"}},
+        },
+        "markets": [
+            {"key": "1x2", "path": "odds", "outcome_field": "c", "odds_field": "p"}
+        ],
+    }
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False)
+    evento = {
+        "id": "1", "h": "A", "a": "B", "torneio": 99999,
+        "odds": [{"c": "home", "p": 2.0}, {"c": "away", "p": 2.0}],
+    }
+    assert provider._parse_event(evento).league == "99999"
+
+
+def test_mapa_superbet_traduz_liga_conhecida():
+    spec = json.loads(
+        (Path(__file__).resolve().parents[1] / "examples" / "superbet.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False)
+    evento = {
+        "eventId": 1, "tournamentId": 1737,
+        "matchName": "A·B",
+        "metadata": {"homeTeamScore": "0", "awayTeamScore": "0", "minutes": "5"},
+        "odds": [
+            {"marketName": "Resultado Final", "code": "1", "price": 2.0},
+            {"marketName": "Resultado Final", "code": "2", "price": 2.0},
+        ],
+    }
+    assert provider._parse_event(evento).league == "Armênia - Premier League"

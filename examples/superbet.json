@@ -14,6 +14,13 @@
     "    `{now-7d}` reproduz o que o próprio site envia (uma semana atrás),",
     "    e é calculado a cada requisição.",
     "",
+    "COMO CAPTURAR O BASELINE: esta casa não expõe um endpoint de pré-jogo",
+    "conhecido, então `bet-ai upcoming` não traz nada. O `watch` resolve",
+    "sozinho: ele guarda como referência o primeiro registro de cada jogo,",
+    "desde que capturado nos 5 primeiros minutos. Deixe o watch rodando.",
+    "Se você descobrir o parâmetro de pré-jogo numa captura nova, declare-o",
+    "em `params_upcoming` e o baseline passa a vir de lá, ainda melhor.",
+    "",
     "IMPORTANTE: o endpoint de listagem devolve apenas o mercado principal",
     "(Resultado Final), mesmo com `marketCount: 22`. Os demais mercados vêm",
     "do endpoint por evento. Para mapeá-los, capture a página de um jogo",
@@ -34,7 +41,19 @@
 
   "fields": {
     "event_id": "eventId",
-    "league": "tournamentId",
+    "league": {
+      "path": "tournamentId",
+      "_nota": "A casa só publica o id da liga neste endpoint. Preencha os que lhe interessam abaixo; os demais aparecem pelo número.",
+      "lookup": {
+        "3": "Amistosos / Diversos",
+        "489": "Argentina - Primera Nacional",
+        "482": "Argentina - Primera B Metropolitana",
+        "1737": "Armênia - Premier League",
+        "101507": "Amistosos de Clubes",
+        "21782": "Brasil - Brasileirão Feminino",
+        "49157": "Brasil - Copa do Brasil Feminina"
+      }
+    },
     "home_team": { "path": "matchName", "split": "·", "index": 0 },
     "away_team": { "path": "matchName", "split": "·", "index": 1 },
     "minute": "metadata.minutes",

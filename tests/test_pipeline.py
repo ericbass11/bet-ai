@@ -253,3 +253,114 @@ def test_com_baseline_o_valor_volta_a_aparecer():
     analysis = pipeline.analyze(ao_vivo)
     assert analysis.baseline_source == "pre_match"
     assert analysis.value_bets
+
+
+# ---------- baseline capturado no início do jogo ----------
+
+
+def test_captura_baseline_nos_primeiros_minutos():
+    """Aos 3 minutos as odds ao vivo ainda são praticamente as de pré-jogo.
+
+    É o que permite o `watch` funcionar sozinho quando a casa não expõe um
+    endpoint de pré-jogo — caso da Superbet.
+    """
+    cedo = make_event(minute=3, event_id="cedo")
+    analysis = Pipeline().analyze(cedo)
+    assert analysis.baseline_source == "pre_match"
+    assert 1.0 < analysis.lambda_home + analysis.lambda_away < 5.0
+
+
+def test_baseline_cedo_bate_com_o_pre_jogo():
+    """A referência tirada aos 3 minutos tem que ser próxima da real."""
+    pre = Pipeline().analyze(make_event(event_id="a"))
+    cedo = Pipeline().analyze(make_event(minute=3, event_id="b"))
+    assert cedo.lambda_home == pytest.approx(pre.lambda_home, rel=0.15)
+    assert cedo.lambda_away == pytest.approx(pre.lambda_away, rel=0.15)
+
+
+def test_jogo_avancado_nao_serve_de_baseline():
+    """Aos 40 minutos as odds já embutem tempo e placar — não é referência."""
+    analysis = Pipeline().analyze(make_event(minute=40, sh=1, event_id="tarde"))
+    assert analysis.baseline_source == "live_inverted"
+
+
+def test_baseline_cedo_persiste_e_gera_valor_depois(tmp_path):
+    """O ciclo completo do `watch`: pega cedo, guarda, usa mais tarde."""
+    with Store(tmp_path / "t.db") as store:
+        pipeline = Pipeline(min_edge=0.03, store=store)
+
+        cedo = make_event(minute=2, event_id="jogo")
+        store.save_snapshot(cedo)
+        pipeline.analyze(cedo)
+
+        # Novo processo: baseline recuperado do banco.
+        outro = Pipeline(min_edge=0.03, store=store)
+        tarde = make_event(
+            minute=80, sh=2, sa=0, event_id="jogo", odds_1x2=(1.60, 6.0, 15.0)
+        )
+        analysis = outro.analyze(tarde)
+
+        assert analysis.baseline_source == "pre_match"
+        assert analysis.value_bets
+
+
+def test_o_primeiro_baseline_visto_e_o_que_vale():
+    """Registrar de novo mais tarde não pode sobrescrever a referência boa."""
+    pipeline = Pipeline()
+    pipeline.register_baseline(make_event(event_id="j"))
+    original = pipeline._baselines["j"]
+    pipeline.register_baseline(make_event(minute=4, sh=2, event_id="j"))
+    assert pipeline._baselines["j"] == original
+
+
+def test_provedor_generico_busca_jogos_futuros():
+    """Sem isto, `bet-ai upcoming` devolvia vazio e o baseline nunca vinha."""
+    from betai.providers import FieldMap, GenericJsonProvider
+
+    spec = {
+        "url": "https://casa/api",
+        "params": {"state": "live"},
+        "params_upcoming": {"state": "prematch"},
+        "events_path": "data",
+        "fields": {"event_id": "id", "home_team": "home", "away_team": "away"},
+        "markets": [
+            {"key": "1x2", "path": "odds", "outcome_field": "code", "odds_field": "price"}
+        ],
+    }
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False, min_interval=0.0)
+
+    chamadas: list[dict] = []
+
+    def falso(url, params):
+        chamadas.append(params)
+        return {
+            "data": [
+                {
+                    "id": "1", "home": "A", "away": "B",
+                    "odds": [
+                        {"code": "home", "price": 2.0},
+                        {"code": "draw", "price": 3.4},
+                        {"code": "away", "price": 3.6},
+                    ],
+                }
+            ]
+        }
+
+    provider._get_json = falso
+    eventos = list(provider.fetch_upcoming())
+    assert chamadas == [{"state": "prematch"}]
+    assert len(eventos) == 1
+
+
+def test_sem_params_upcoming_nao_quebra():
+    from betai.providers import FieldMap, GenericJsonProvider
+
+    spec = {
+        "url": "https://casa/api",
+        "params": {"state": "live"},
+        "events_path": "data",
+        "fields": {"event_id": "id", "home_team": "home", "away_team": "away"},
+        "markets": [{"key": "1x2", "path": "odds", "outcome_field": "c", "odds_field": "p"}],
+    }
+    provider = GenericJsonProvider(FieldMap(spec), respect_robots=False)
+    assert list(provider.fetch_upcoming()) == []

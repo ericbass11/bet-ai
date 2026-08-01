@@ -127,6 +127,10 @@ class FieldMap:
         self.markets: list[dict[str, Any]] = spec.get("markets", [])
         self.headers: dict[str, str] = spec.get("headers", {})
         self.params: dict[str, str] = spec.get("params", {})
+        # Parâmetros para buscar jogos que ainda não começaram. É deles que
+        # sai o baseline pré-jogo, sem o qual não há análise independente.
+        self.params_upcoming: dict[str, str] | None = spec.get("params_upcoming")
+        self.url_upcoming: str = spec.get("url_upcoming", self.url)
 
 
 class GenericJsonProvider(Provider):
@@ -237,12 +241,23 @@ class GenericJsonProvider(Provider):
             return dig(raw, spec, default)
 
         value = dig(raw, spec.get("path", ""), None)
+        if value is None:
+            return default
+
         separator = spec.get("split")
-        if value is None or separator is None:
-            return value if value is not None else default
-        partes = [p.strip() for p in str(value).split(separator)]
-        index = int(spec.get("index", 0))
-        return partes[index] if 0 <= index < len(partes) else default
+        if separator is not None:
+            partes = [p.strip() for p in str(value).split(separator)]
+            index = int(spec.get("index", 0))
+            value = partes[index] if 0 <= index < len(partes) else None
+            if value is None:
+                return default
+
+        # Tradução de código para nome legível. Casas costumam publicar só o
+        # id da liga; a tabela deixa o usuário dar nome aos que lhe importam.
+        lookup = spec.get("lookup")
+        if lookup:
+            return lookup.get(str(value), spec.get("lookup_default", value))
+        return value
 
     def _parse_event(self, raw: Any) -> Event | None:
         f = self.map.fields
@@ -277,40 +292,37 @@ class GenericJsonProvider(Provider):
             markets=markets,
         )
 
-    def _get_json(self) -> Any:
+    def _get_json(self, url: str, params: dict[str, str]) -> Any:
         """Busca e decodifica a resposta, com plano B para compressão.
 
         Alguns CDNs devolvem Brotli mesmo quando o cliente não anunciou
         suporte, e a descompressão falha com "incorrect header check". Nesse
         caso repetimos pedindo a resposta sem compressão.
         """
-        params = render_params(self.map.params)
+        params = render_params(params)
         try:
-            resp = self.client.get(self.map.url, params=params)
+            resp = self.client.get(url, params=params)
         except httpx.DecodingError:
             self.limiter.wait()
-            resp = self.client.get(
-                self.map.url, params=params, headers={"Accept-Encoding": "identity"}
-            )
+            resp = self.client.get(url, params=params, headers={"Accept-Encoding": "identity"})
         if resp.status_code >= 400:
             # O corpo de um 4xx quase sempre diz o que falta na requisição.
             # Sem ele, o usuário fica adivinhando qual parâmetro está errado.
             detalhe = resp.text[:300].strip().replace("\n", " ")
             raise ProviderError(
-                f"{self.map.url} respondeu {resp.status_code}"
-                f"{f' — {detalhe}' if detalhe else ''}"
+                f"{url} respondeu {resp.status_code}{f' — {detalhe}' if detalhe else ''}"
             )
         return resp.json()
 
-    def fetch_live(self) -> Iterable[Event]:
+    def _fetch(self, url: str, params: dict[str, str]) -> list[Event]:
         self._check_robots()
         self.limiter.wait()
         try:
-            payload = self._get_json()
+            payload = self._get_json(url, params)
         except httpx.HTTPError as exc:
-            raise ProviderError(f"falha ao ler {self.map.url}: {exc}") from exc
+            raise ProviderError(f"falha ao ler {url}: {exc}") from exc
         except ValueError as exc:
-            raise ProviderError(f"resposta de {self.map.url} não é JSON válido") from exc
+            raise ProviderError(f"resposta de {url} não é JSON válido") from exc
 
         raw_events = dig(payload, self.map.events_path, payload) if self.map.events_path else payload
         if not isinstance(raw_events, list):
@@ -319,6 +331,22 @@ class GenericJsonProvider(Provider):
             )
 
         return [e for raw in raw_events if (e := self._parse_event(raw))]
+
+    def fetch_live(self) -> Iterable[Event]:
+        return self._fetch(self.map.url, self.map.params)
+
+    def fetch_upcoming(self) -> Iterable[Event]:
+        """Jogos que ainda não começaram — a fonte do baseline pré-jogo.
+
+        Exige `params_upcoming` no mapa. Sem isso devolve vazio, e o baseline
+        terá que vir da captura no início do jogo (veja `Pipeline`).
+        """
+        if self.map.params_upcoming is None:
+            return []
+        eventos = self._fetch(self.map.url_upcoming, self.map.params_upcoming)
+        # O endpoint pode devolver jogos em andamento junto; só interessam os
+        # que ainda não começaram.
+        return [e for e in eventos if not e.state.is_live]
 
 
 def _as_int(value: Any) -> int:
