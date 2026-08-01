@@ -339,6 +339,51 @@ def extract_from_har(har: dict) -> list[tuple[str, Any]]:
     return out
 
 
+def _json_embutido(texto: str) -> Any:
+    """Extrai o JSON de dentro de uma mensagem de WebSocket.
+
+    Raramente a mensagem é JSON puro. Bibliotecas de tempo real embrulham o
+    conteúdo — socket.io manda `42["stats",{...}]`, outras prefixam com um
+    código de canal. Achar a primeira chave ou colchete e tentar dali resolve
+    a maioria dos casos sem precisar conhecer o protocolo.
+    """
+    for abre, fecha in (("{", "}"), ("[", "]")):
+        inicio = texto.find(abre)
+        fim = texto.rfind(fecha)
+        if inicio >= 0 and fim > inicio:
+            try:
+                return json.loads(texto[inicio : fim + 1])
+            except ValueError:
+                continue
+    return None
+
+
+def extract_websocket_from_har(har: dict) -> list[tuple[str, Any]]:
+    """Extrai (url, payload) das mensagens de WebSocket de um HAR.
+
+    Painéis de acompanhamento ao vivo costumam transmitir por WebSocket em vez
+    de fazer requisições, e o dado então não aparece como resposta nenhuma. O
+    Chrome grava esses quadros em `_webSocketMessages` — mas só a partir do
+    momento em que a aba Network começou a gravar.
+
+    Só as mensagens recebidas interessam: as enviadas são inscrição em canal.
+    """
+    out: list[tuple[str, Any]] = []
+    for entry in har.get("log", {}).get("entries", []):
+        mensagens = entry.get("_webSocketMessages") or []
+        url = entry.get("request", {}).get("url", "")
+        for i, msg in enumerate(mensagens):
+            if msg.get("type") == "send":
+                continue
+            dados = msg.get("data")
+            if not isinstance(dados, str) or len(dados) < 10:
+                continue
+            payload = _json_embutido(dados)
+            if payload is not None:
+                out.append((f"{url} [mensagem {i}]", payload))
+    return out
+
+
 def build_field_map(url: str, payload: Any) -> dict[str, Any] | None:
     """Monta um rascunho de `field_map.json` a partir de um payload."""
     candidates = [score_candidate(c) for c in walk_arrays(payload)]

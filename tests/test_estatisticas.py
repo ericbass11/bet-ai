@@ -303,3 +303,89 @@ def test_escanteio_nao_mexe_na_probabilidade():
         return live_matrix(1.57, 1.13, estado).match_odds()["home"]
 
     assert prob() == prob(corners_home=11, corners_away=0, yellow_cards_away=4)
+
+
+# ---------- WebSocket ----------
+
+
+def _har_ws(url: str, *mensagens) -> dict:
+    return {
+        "log": {
+            "entries": [
+                {
+                    "request": {"url": url},
+                    "response": {"content": {}},
+                    "_webSocketMessages": list(mensagens),
+                }
+            ]
+        }
+    }
+
+
+def test_le_estatistica_de_mensagem_de_websocket():
+    from betai.discover import extract_websocket_from_har
+
+    har = _har_ws(
+        "wss://lmt.exemplo/stream",
+        {"type": "receive", "data": json.dumps(SPORTRADAR)},
+    )
+    achados = extract_websocket_from_har(har)
+    assert len(achados) == 1
+    assert "Shots on target" in json.dumps(achados[0][1])
+
+
+def test_ignora_mensagem_enviada_pelo_navegador():
+    """As enviadas são inscrição em canal, não dado."""
+    from betai.discover import extract_websocket_from_har
+
+    har = _har_ws(
+        "wss://lmt.exemplo/stream",
+        {"type": "send", "data": json.dumps({"subscribe": "match.72575500"})},
+        {"type": "receive", "data": json.dumps(SPORTRADAR)},
+    )
+    assert len(extract_websocket_from_har(har)) == 1
+
+
+def test_desembrulha_json_dentro_do_protocolo():
+    """socket.io e semelhantes prefixam a mensagem com um código."""
+    from betai.discover import extract_websocket_from_har
+
+    har = _har_ws(
+        "wss://lmt.exemplo/stream",
+        {"type": "receive", "data": '42["stats",' + json.dumps(SPORTRADAR) + "]"},
+    )
+    achados = extract_websocket_from_har(har)
+    assert achados and "Ball possession" in json.dumps(achados[0][1])
+
+
+def test_mensagem_que_nao_e_json_nao_derruba():
+    from betai.discover import extract_websocket_from_har
+
+    har = _har_ws(
+        "wss://lmt.exemplo/stream",
+        {"type": "receive", "data": "ping"},
+        {"type": "receive", "data": "\x00\x01binario ilegivel aqui"},
+    )
+    assert extract_websocket_from_har(har) == []
+
+
+def test_comando_encontra_estatistica_so_no_websocket(tmp_path):
+    har = _har(("https://casa/api/odds", {"data": [{"eventId": 1}]}))
+    har["log"]["entries"].append(
+        {
+            "request": {"url": "wss://lmt.exemplo/stream"},
+            "response": {"content": {}},
+            "_webSocketMessages": [{"type": "receive", "data": json.dumps(SPORTRADAR)}],
+        }
+    )
+    codigo, saida = _rodar(tmp_path, har)
+
+    assert codigo == 0
+    assert "WebSocket" in saida
+    assert "Shots on target" in saida
+
+
+def test_har_sem_websocket_nao_menciona_websocket(tmp_path):
+    codigo, saida = _rodar(tmp_path, _har(("https://casa/api/odds", SUPERBET)))
+    assert codigo == 0
+    assert "WebSocket" not in saida

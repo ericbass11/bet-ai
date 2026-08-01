@@ -566,7 +566,13 @@ def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
     Imprime apenas nomes de campos e valores numéricos das respostas — nunca
     cabeçalhos nem cookies, que é o que torna um HAR sensível.
     """
-    from .discover import TERMOS_DE_ESTATISTICA, _normalizar, buscar_campos, extract_from_har
+    from .discover import (
+        TERMOS_DE_ESTATISTICA,
+        _normalizar,
+        buscar_campos,
+        extract_from_har,
+        extract_websocket_from_har,
+    )
 
     path = Path(args.captura)
     if not path.exists():
@@ -574,11 +580,16 @@ def cmd_estatisticas(args: argparse.Namespace, settings: Settings) -> int:
         return 1
 
     raw = json.loads(path.read_text(encoding="utf-8"))
-    payloads = (
-        extract_from_har(raw)
-        if isinstance(raw, dict) and "entries" in raw.get("log", {})
-        else [("", raw)]
-    )
+    if isinstance(raw, dict) and "entries" in raw.get("log", {}):
+        payloads = extract_from_har(raw)
+        # Painel ao vivo costuma transmitir por WebSocket em vez de fazer
+        # requisições; sem olhar os quadros, o dado some da captura.
+        quadros = extract_websocket_from_har(raw)
+        if quadros:
+            print(f"{DIM}{len(quadros)} mensagem(ns) de WebSocket na captura.{RESET}\n")
+        payloads = payloads + quadros
+    else:
+        payloads = [("", raw)]
 
     termos = [_normalizar(t) for t in (args.termo or [])] or TERMOS_DE_ESTATISTICA
     if args.termo:
